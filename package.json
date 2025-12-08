@@ -5,7 +5,7 @@
   "type": "module",
   "main": "backend/src/index.js",
   "scripts": {
-    "postinstall": "cd backend && npm install && cd ../frontend && npm install && npm run build && mkdir -p ../backend/public && cp -r dist/* ../backend/public/",
+    "build": "cd backend && npm install && cd ../frontend && npm install && npm run build && mkdir -p ../backend/public && cp -r dist/* ../backend/public/",
     "start": "node backend/src/index.js",
     "dev": "cd backend && npm run dev"
   },
