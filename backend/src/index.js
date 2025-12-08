@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 import searchBuilderRoutes from './routes/searchBuilder.js';
 
 dotenv.config();
@@ -27,12 +28,31 @@ app.get('/health', (req, res) => {
 
 // Serve static files from the React app (production)
 const publicPath = join(__dirname, '..', 'public');
-app.use(express.static(publicPath));
 
-// Handle React routing, return all requests to React app
-app.get('*', (req, res) => {
-  res.sendFile(join(publicPath, 'index.html'));
-});
+// Check if public folder exists (production mode)
+if (existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+
+  // Handle React routing, return all requests to React app
+  app.get('*', (req, res) => {
+    res.sendFile(join(publicPath, 'index.html'));
+  });
+} else {
+  // Development mode - just show API info
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'Reverse-Engineer Searcher API',
+      status: 'running',
+      endpoints: [
+        'POST /api/search-builder/from-pmids',
+        'POST /api/search-builder/generate-blog',
+        'POST /api/search-builder/validate-query',
+        'GET /api/search-builder/fetch-article/:pmid',
+        'GET /health'
+      ]
+    });
+  });
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {

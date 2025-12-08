@@ -1,17 +1,2 @@
 # Zeabur 部署配置
-# 全端整合部署（前端打包後由後端提供靜態檔案服務）
-
-build:
-  # 安裝所有依賴
-  - cd backend && npm install
-  - cd frontend && npm install
-  # 打包前端
-  - cd frontend && npm run build
-  # 複製打包結果到後端
-  - cp -r frontend/dist backend/public
-
-start:
-  command: cd backend && npm start
-
-env:
-  PORT: 8080
+# Node.js 全端應用（前端打包後由後端提供靜態檔案服務）
