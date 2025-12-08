@@ -341,18 +341,26 @@ class PubMedClient {
   /**
    * 執行 PubMed 搜尋並取得命中數量和 PMID 列表
    * @param {string} query - PubMed 搜尋字串
-   * @param {number} retmax - 最多回傳幾筆 PMID（預設 500）
+   * @param {Object|number} options - 選項物件或 retmax 數字（向下相容）
    * @returns {Promise<Object>} { count, pmids }
    */
-  async searchPubMed(query, retmax = 500) {
+  async searchPubMed(query, options = {}) {
+    // 向下相容：如果傳入數字，當作 retmax
+    const opts = typeof options === 'number'
+      ? { maxResults: options }
+      : options;
+
+    const { maxResults = 500, sort = 'relevance' } = opts;
+
     return this._withRetry(async () => {
       const response = await this.axiosInstance.get('/esearch.fcgi', {
         params: this._buildParams({
           db: 'pubmed',
           term: query,
-          retmax,
+          retmax: maxResults,
           retmode: 'json',
-          usehistory: 'n'
+          usehistory: 'n',
+          sort: sort // 'relevance' 或 'pub_date'
         })
       });
 

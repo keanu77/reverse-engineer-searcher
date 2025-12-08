@@ -1,0 +1,22 @@
+# Zeabur 部署配置
+# 這是一個 monorepo 專案，包含 frontend 和 backend 兩個服務
+
+services:
+  # 後端服務
+  - name: backend
+    source: backend
+    type: node
+    env:
+      PORT: 3001
+    build:
+      command: npm install
+    start:
+      command: npm start
+
+  # 前端服務
+  - name: frontend
+    source: frontend
+    type: static
+    build:
+      command: npm install && npm run build
+      output: dist

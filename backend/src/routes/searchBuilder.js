@@ -1,28 +1,11 @@
 import { Router } from 'express';
-import multer from 'multer';
 import PubMedClient from '../modules/PubMedClient.js';
 import TermAnalyzer from '../modules/TermAnalyzer.js';
 import LLMService from '../modules/LLMService.js';
 import QueryValidator from '../modules/QueryValidator.js';
 import QueryTranslator from '../modules/QueryTranslator.js';
-import PdfExtractor from '../modules/PdfExtractor.js';
 
 const router = Router();
-
-// 設定 multer 用於處理 PDF 上傳（存在記憶體中）
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 限制 10MB
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('只接受 PDF 檔案'), false);
-    }
-  }
-});
 
 // 初始化翻譯器
 const queryTranslator = new QueryTranslator();
@@ -294,56 +277,98 @@ router.get('/fetch-article/:pmid', async (req, res) => {
 });
 
 /**
- * POST /api/search-builder/extract-from-pdf
- * 從 PDF 中提取 PMIDs
+ * POST /api/search-builder/generate-blog
+ * 根據搜尋結果生成科普部落格文章
  */
-router.post('/extract-from-pdf', upload.single('pdf'), async (req, res) => {
+router.post('/generate-blog', async (req, res) => {
   try {
-    if (!req.file) {
+    const { query_string, topic, gold_pmids = [], llmConfig = {}, options = {} } = req.body;
+
+    if (!query_string) {
       return res.status(400).json({
-        error: 'No file uploaded',
-        message: '請上傳 PDF 檔案'
+        error: 'Invalid input',
+        message: '請提供搜尋式 (query_string)'
       });
     }
 
-    console.log(`Processing PDF: ${req.file.originalname} (${(req.file.size / 1024).toFixed(1)} KB)`);
+    console.log('Generating blog article for query:', query_string.substring(0, 100) + '...');
+    console.log('Gold PMIDs (primary sources):', gold_pmids);
 
-    const pdfExtractor = new PdfExtractor();
-    const result = await pdfExtractor.extractFromBuffer(req.file.buffer);
+    // 1. 初始化 PubMed Client
+    const pubMedClient = new PubMedClient();
 
-    if (result.pmids.length === 0) {
-      return res.json({
-        success: true,
-        pmids: [],
-        count: 0,
-        message: '未在 PDF 中找到 PMID。請確認 PDF 包含 PubMed 參考文獻。',
-        metadata: result.metadata
+    // 2. 執行搜尋取得前 10 篇相關文章
+    console.log('Searching PubMed for relevant articles...');
+    const searchResult = await pubMedClient.searchPubMed(query_string, { maxResults: 15 });
+
+    if (!searchResult.pmids || searchResult.pmids.length === 0) {
+      return res.status(404).json({
+        error: 'No articles found',
+        message: '搜尋式沒有找到任何文章，無法生成部落格'
       });
     }
 
+    // 3. 取得文章詳細資訊（包含摘要）
+    // 合併 gold_pmids 和搜尋結果，確保 gold_pmids 都包含在內
+    const allPmids = [...new Set([...gold_pmids, ...searchResult.pmids])].slice(0, 15);
+    console.log(`Fetching details for ${allPmids.length} articles...`);
+    const { articles } = await pubMedClient.fetchArticlesByPmids(allPmids);
+
+    if (articles.length === 0) {
+      return res.status(404).json({
+        error: 'No article details found',
+        message: '無法取得文章詳細資訊'
+      });
+    }
+
+    // 4. 分類文章：主要文章 (gold) vs 輔助文章
+    const goldPmidSet = new Set(gold_pmids.map(p => String(p)));
+    const primaryArticles = articles.filter(a => goldPmidSet.has(String(a.pmid)));
+    const supportingArticles = articles.filter(a => !goldPmidSet.has(String(a.pmid))).slice(0, 10 - primaryArticles.length);
+
+    console.log(`Primary articles: ${primaryArticles.length}, Supporting articles: ${supportingArticles.length}`);
+
+    // 5. 初始化 LLM Service
+    const llmOptions = {
+      provider: llmConfig.provider || process.env.LLM_PROVIDER || 'groq',
+      apiKey: llmConfig.apiKey || undefined,
+      baseURL: llmConfig.baseURL || undefined,
+      model: llmConfig.model || undefined
+    };
+    const llmService = new LLMService(llmOptions);
+
+    // 6. 決定主題（如果沒有提供，從主要文章推斷）
+    const articleTopic = topic || llmService.inferTopicFromArticles(primaryArticles.length > 0 ? primaryArticles : articles);
+
+    // 7. 生成部落格文章
+    console.log(`Generating blog article about: ${articleTopic}`);
+    const blogResult = await llmService.generateBlogArticle(
+      primaryArticles,
+      supportingArticles,
+      articleTopic,
+      {
+        wordCount: options.wordCount || '2000-2500',
+        language: options.language || 'zh-TW'
+      }
+    );
+
+    // 8. 回傳結果
     res.json({
       success: true,
-      pmids: result.pmids,
-      count: result.count,
-      matches: result.matches.slice(0, 20), // 只回傳前 20 個匹配詳情
-      metadata: result.metadata,
-      message: `成功從 PDF 中提取 ${result.count} 個 PMID`
+      ...blogResult,
+      searchInfo: {
+        query: query_string,
+        totalResults: searchResult.count,
+        primaryArticlesUsed: primaryArticles.length,
+        supportingArticlesUsed: supportingArticles.length
+      }
     });
 
   } catch (error) {
-    console.error('Error extracting PMIDs from PDF:', error);
-
-    // 處理 multer 錯誤
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        error: 'File too large',
-        message: 'PDF 檔案大小不能超過 10MB'
-      });
-    }
-
+    console.error('Error generating blog:', error);
     res.status(500).json({
-      error: 'PDF processing failed',
-      message: error.message || '處理 PDF 時發生錯誤'
+      error: 'Blog generation failed',
+      message: error.message || '生成部落格文章時發生錯誤'
     });
   }
 });

@@ -1,6 +1,12 @@
 # Reverse-Engineer Searcher
 
-反向工程搜尋字串生成器 - 從金標準文獻自動產生 PubMed 搜尋策略
+反向工程搜尋字串生成器 - 從金標準文獻自動產生 PubMed 搜尋策略，並可生成科普衛教文章
+
+## 主要功能
+
+1. **搜尋策略生成**：輸入重要文獻 PMIDs，自動產生三種版本的 PubMed 搜尋式（Sensitive / Balanced / Compact）
+2. **多資料庫支援**：自動翻譯為 Embase, Cochrane, CINAHL 等資料庫語法
+3. **AI 科普文章生成**：以輸入的重要文獻為主軸（70-80%），搭配搜尋到的相關文獻為輔（20-30%），生成 2000-2500 字的科普衛教文章
 
 ## 專案結構
 
@@ -14,16 +20,20 @@
 │   │   └── modules/
 │   │       ├── PubMedClient.js   # PubMed API 封裝
 │   │       ├── TermAnalyzer.js   # Term 統計分析
-│   │       ├── LLMService.js     # 多 LLM 支援
-│   │       └── QueryValidator.js # 搜尋式驗證
-│   ├── .env                 # 環境變數 (已設定 Groq)
+│   │       ├── LLMService.js     # 多 LLM 支援 + 科普文章生成
+│   │       ├── QueryValidator.js # 搜尋式驗證
+│   │       └── QueryTranslator.js # 多資料庫翻譯
+│   ├── .env                 # 環境變數 (不要提交到 git)
+│   ├── .env.example         # 環境變數範例
 │   └── package.json
 ├── frontend/                # React + Vite 前端
 │   ├── src/
 │   │   ├── main.jsx
-│   │   ├── App.jsx          # 含進階 LLM 設定
+│   │   ├── App.jsx          # 含進階 LLM 設定 + 科普文章 UI
 │   │   └── index.css
 │   └── package.json
+├── zeabur.yaml              # Zeabur 部署配置
+├── .gitignore
 └── start.sh                 # 一鍵啟動腳本
 ```
 
@@ -48,6 +58,7 @@ http://localhost:3000
 2. 點擊「生成搜尋字串」
 3. 查看生成的三種搜尋式（Sensitive / Balanced / Compact）
 4. 複製適合的搜尋式到 PubMed 使用
+5. （可選）點擊「AI 科普文章生成」區塊中的按鈕，自動生成科普衛教文章
 
 ## 支援的 LLM Providers
 
@@ -96,6 +107,19 @@ http://localhost:3000
 
 ### GET /api/search-builder/providers
 取得支援的 LLM providers 列表
+
+### POST /api/search-builder/generate-blog
+生成科普衛教文章
+
+**Request:**
+```json
+{
+  "query_string": "PubMed 搜尋式",
+  "gold_pmids": ["12345678", "23456789"],
+  "topic": "文章主題（可選）",
+  "llmConfig": { ... }
+}
+```
 
 ## 環境變數
 

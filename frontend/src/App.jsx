@@ -86,10 +86,11 @@ function App() {
   const [roleFilter, setRoleFilter] = useState('all');
   const [copiedId, setCopiedId] = useState(null);
 
-  // PDF 上傳相關狀態
-  const [pdfUploading, setPdfUploading] = useState(false);
-  const [pdfResult, setPdfResult] = useState(null);
-  const [dragActive, setDragActive] = useState(false);
+  // 部落格生成相關狀態
+  const [blogLoading, setBlogLoading] = useState(false);
+  const [blogResult, setBlogResult] = useState(null);
+  const [blogError, setBlogError] = useState(null);
+  const [blogTopic, setBlogTopic] = useState('');
 
   // 即時 PMID 解析結果
   const parsedPmids = useMemo(() => {
@@ -150,87 +151,6 @@ function App() {
       });
     } finally {
       setTestingLlm(false);
-    }
-  };
-
-  // PDF 上傳處理
-  const handlePdfUpload = async (file) => {
-    if (!file) return;
-
-    if (file.type !== 'application/pdf') {
-      setError('請上傳 PDF 檔案');
-      setErrorType('validation');
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setError('PDF 檔案大小不能超過 10MB');
-      setErrorType('validation');
-      return;
-    }
-
-    setPdfUploading(true);
-    setPdfResult(null);
-    setError(null);
-    setErrorType(null);
-
-    const formData = new FormData();
-    formData.append('pdf', file);
-
-    try {
-      const response = await axios.post('/api/search-builder/extract-from-pdf', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
-      });
-
-      const data = response.data;
-      setPdfResult(data);
-
-      if (data.pmids && data.pmids.length > 0) {
-        // 將提取的 PMIDs 加入輸入框
-        const currentPmids = pmidInput.trim();
-        const newPmids = data.pmids.join('\n');
-        if (currentPmids) {
-          setPmidInput(currentPmids + '\n' + newPmids);
-        } else {
-          setPmidInput(newPmids);
-        }
-      }
-    } catch (err) {
-      console.error('PDF upload error:', err);
-      const errorInfo = getErrorMessage(err);
-      setError(errorInfo.message);
-      setErrorType(errorInfo.type);
-    } finally {
-      setPdfUploading(false);
-    }
-  };
-
-  // 拖拽處理
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handlePdfUpload(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileInput = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handlePdfUpload(e.target.files[0]);
     }
   };
 
@@ -388,6 +308,69 @@ function App() {
 
   const currentProviderConfig = DEFAULT_PROVIDERS[llmConfig.provider];
 
+  // 生成部落格文章
+  const handleGenerateBlog = async (queryString) => {
+    setBlogLoading(true);
+    setBlogError(null);
+    setBlogResult(null);
+
+    try {
+      const requestBody = {
+        query_string: queryString,
+        gold_pmids: uniquePmids, // 傳送用戶輸入的 PMIDs 作為主要文獻
+        topic: blogTopic || undefined,
+        options: {
+          wordCount: '2000-2500',
+          language: 'zh-TW'
+        }
+      };
+
+      // 如果有進階設定，加入 llmConfig
+      if (llmConfig.apiKey || llmConfig.provider !== 'groq') {
+        requestBody.llmConfig = {
+          provider: llmConfig.provider,
+          apiKey: llmConfig.apiKey || undefined,
+          baseURL: llmConfig.baseURL || undefined,
+          model: llmConfig.model || undefined
+        };
+      }
+
+      const response = await axios.post('/api/search-builder/generate-blog', requestBody);
+      setBlogResult(response.data);
+    } catch (err) {
+      console.error('Blog generation error:', err);
+      const errorInfo = getErrorMessage(err);
+      setBlogError(errorInfo.message);
+    } finally {
+      setBlogLoading(false);
+    }
+  };
+
+  // 複製部落格文章
+  const handleCopyBlog = async () => {
+    if (!blogResult?.article) return;
+    try {
+      await navigator.clipboard.writeText(blogResult.article);
+      setCopiedId('blog');
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  };
+
+  // 導出部落格為 Markdown
+  const handleExportBlogMd = () => {
+    if (!blogResult?.article) return;
+
+    const blob = new Blob([blogResult.article], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `blog-${blogResult.metadata?.topic?.substring(0, 30) || 'article'}-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="container">
       <header className="header">
@@ -401,61 +384,6 @@ function App() {
       {/* Input Section */}
       <section className="input-section">
         <h2>輸入重要文獻 PMIDs</h2>
-
-        {/* PDF 上傳區域 */}
-        <div
-          className={`pdf-upload-zone ${dragActive ? 'drag-active' : ''} ${pdfUploading ? 'uploading' : ''}`}
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-        >
-          <input
-            type="file"
-            id="pdf-input"
-            accept=".pdf,application/pdf"
-            onChange={handleFileInput}
-            disabled={loading || pdfUploading}
-            style={{ display: 'none' }}
-          />
-          <label htmlFor="pdf-input" className="pdf-upload-label">
-            {pdfUploading ? (
-              <>
-                <span className="upload-icon">⏳</span>
-                <span className="upload-text">正在解析 PDF...</span>
-              </>
-            ) : (
-              <>
-                <span className="upload-icon">📄</span>
-                <span className="upload-text">
-                  拖拽 PDF 到這裡，或 <span className="upload-link">點擊選擇檔案</span>
-                </span>
-                <span className="upload-hint">從 PDF 中自動提取 PMID（支援系統性回顧、meta-analysis 等）</span>
-              </>
-            )}
-          </label>
-        </div>
-
-        {/* PDF 提取結果 */}
-        {pdfResult && (
-          <div className={`pdf-result ${pdfResult.count > 0 ? 'success' : 'warning'}`}>
-            <span className="pdf-result-icon">{pdfResult.count > 0 ? '✅' : '⚠️'}</span>
-            <div className="pdf-result-content">
-              <span className="pdf-result-message">{pdfResult.message}</span>
-              {pdfResult.metadata?.title && (
-                <span className="pdf-result-meta">檔案：{pdfResult.metadata.title}</span>
-              )}
-            </div>
-            <button
-              className="pdf-result-close"
-              onClick={() => setPdfResult(null)}
-            >×</button>
-          </div>
-        )}
-
-        <div className="input-divider">
-          <span>或直接輸入 PMID</span>
-        </div>
 
         <textarea
           value={pmidInput}
@@ -903,9 +831,151 @@ function App() {
             ))}
           </section>
 
+          {/* Blog Generation Section */}
+          <section className="blog-section">
+            <h2>AI 科普文章生成</h2>
+            <p className="section-description">
+              以您提供的重要文獻為主軸（佔 70-80%），搭配搜尋到的相關文獻為輔（佔 20-30%），自動生成一篇約 2000-2500 字的科普衛教文章。
+            </p>
+
+            <div className="blog-input-row">
+              <div className="blog-topic-input">
+                <label>文章主題（可選，留空自動判斷）</label>
+                <input
+                  type="text"
+                  value={blogTopic}
+                  onChange={(e) => setBlogTopic(e.target.value)}
+                  placeholder="例如：運動對於膝關節炎的治療效果"
+                  disabled={blogLoading}
+                />
+              </div>
+              <div className="blog-query-select">
+                <label>選擇搜尋式版本</label>
+                <div className="blog-buttons">
+                  {result.queries?.map(query => (
+                    <button
+                      key={query.id}
+                      className="btn btn-blog"
+                      onClick={() => handleGenerateBlog(query.query_string)}
+                      disabled={blogLoading}
+                    >
+                      {blogLoading ? '生成中...' : `使用 ${query.label.replace(' Version', '')}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {blogLoading && (
+              <div className="blog-loading">
+                <div className="loading-spinner"></div>
+                <p>正在搜尋相關文獻並生成科普文章，請稍候（約需 30-60 秒）...</p>
+              </div>
+            )}
+
+            {blogError && (
+              <div className="error-message">
+                <span className="error-icon">❌</span>
+                <span className="error-text">{blogError}</span>
+              </div>
+            )}
+
+            {blogResult && (
+              <div className="blog-result">
+                <div className="blog-header">
+                  <h3>生成的文章</h3>
+                  <div className="blog-meta">
+                    <span>主題：{blogResult.metadata?.topic}</span>
+                    <span>字數：約 {blogResult.metadata?.charCount} 字</span>
+                    <span>主要文獻：{blogResult.metadata?.primarySourceCount || 0} 篇</span>
+                    <span>輔助文獻：{blogResult.metadata?.supportingSourceCount || 0} 篇</span>
+                  </div>
+                  <div className="blog-actions">
+                    <button
+                      className={`btn btn-secondary ${copiedId === 'blog' ? 'copied' : ''}`}
+                      onClick={handleCopyBlog}
+                    >
+                      {copiedId === 'blog' ? '已複製!' : '複製文章'}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleExportBlogMd}
+                    >
+                      導出 Markdown
+                    </button>
+                  </div>
+                </div>
+
+                <div className="blog-content">
+                  <div
+                    className="blog-article"
+                    dangerouslySetInnerHTML={{
+                      __html: blogResult.article
+                        .replace(/\n/g, '<br>')
+                        .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                        .replace(/^- (.+)$/gm, '<li>$1</li>')
+                    }}
+                  />
+                </div>
+
+                {blogResult.references?.length > 0 && (
+                  <div className="blog-references">
+                    <h4>參考文獻</h4>
+                    {/* 主要文獻 */}
+                    {blogResult.references.filter(ref => ref.isPrimary).length > 0 && (
+                      <>
+                        <h5 className="ref-category primary">主要文獻（文章核心）</h5>
+                        <ul>
+                          {blogResult.references.filter(ref => ref.isPrimary).map((ref, i) => (
+                            <li key={i} className="primary-ref">
+                              <a
+                                href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                PMID: {ref.pmid}
+                              </a>
+                              {' '}- {ref.title} ({ref.journal}, {ref.year})
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {/* 輔助文獻 */}
+                    {blogResult.references.filter(ref => !ref.isPrimary).length > 0 && (
+                      <>
+                        <h5 className="ref-category supporting">輔助文獻（補充佐證）</h5>
+                        <ul>
+                          {blogResult.references.filter(ref => !ref.isPrimary).map((ref, i) => (
+                            <li key={i} className="supporting-ref">
+                              <a
+                                href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                PMID: {ref.pmid}
+                              </a>
+                              {' '}- {ref.title} ({ref.journal}, {ref.year})
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
           {/* Disclaimer */}
           <div className="disclaimer">
             本工具基於您選擇的重要文獻自動生成搜尋式，仍建議搭配資訊專家 / librarian 與人工調整後使用。
+            <br />
+            AI 生成的科普文章僅供參考，發布前請務必經過專業人員審核。
           </div>
         </>
       )}
