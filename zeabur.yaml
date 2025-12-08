@@ -1,22 +1,17 @@
 # Zeabur 部署配置
-# 這是一個 monorepo 專案，包含 frontend 和 backend 兩個服務
+# 全端整合部署（前端打包後由後端提供靜態檔案服務）
 
-services:
-  # 後端服務
-  - name: backend
-    source: backend
-    type: node
-    env:
-      PORT: 3001
-    build:
-      command: npm install
-    start:
-      command: npm start
+build:
+  # 安裝所有依賴
+  - cd backend && npm install
+  - cd frontend && npm install
+  # 打包前端
+  - cd frontend && npm run build
+  # 複製打包結果到後端
+  - cp -r frontend/dist backend/public
 
-  # 前端服務
-  - name: frontend
-    source: frontend
-    type: static
-    build:
-      command: npm install && npm run build
-      output: dist
+start:
+  command: cd backend && npm start
+
+env:
+  PORT: 8080
