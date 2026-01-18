@@ -1,2 +1,33 @@
 # Zeabur 部署配置
 # Node.js 全端應用（前端打包後由後端提供靜態檔案服務）
+
+# 主要設定
+build_command: npm run build
+start_command: npm start
+
+# Node.js 版本
+runtime: node
+node_version: "18"
+
+# 環境變數（敏感資訊請在 Zeabur 控制台設定）
+env:
+  NODE_ENV: production
+  PORT: 3001
+
+# 健康檢查
+healthcheck:
+  path: /health
+  interval: 30s
+  timeout: 10s
+  retries: 3
+
+# 資源限制（可依需求調整）
+resources:
+  memory: 512Mi
+  cpu: 0.5
+
+# 自動擴展設定
+autoscaling:
+  min_replicas: 1
+  max_replicas: 3
+  target_cpu_utilization: 80

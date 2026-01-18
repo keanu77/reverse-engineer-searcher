@@ -1735,3 +1735,119 @@ body {
     padding: 0.5rem 1rem;
   }
 }
+
+/* ===================== Accessibility ===================== */
+
+/* Visually hidden for screen readers */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skip link for keyboard navigation */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: #0d9488;
+  color: white;
+  padding: 8px 16px;
+  z-index: 100;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* Focus styles for better keyboard navigation */
+:focus-visible {
+  outline: 3px solid #14b8a6;
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #14b8a6;
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .btn-primary {
+    background: #0d9488;
+    border: 2px solid #0d9488;
+  }
+
+  .query-string {
+    background: #1e293b;
+    border: 2px solid #14b8a6;
+  }
+
+  .error-message {
+    border-width: 3px;
+  }
+}
+
+/* Reduced motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .progress-fill {
+    animation: none;
+  }
+
+  .loading-spinner {
+    animation: none;
+    border-top-color: #0d9488;
+  }
+
+  .loading-step.active .step-icon {
+    animation: none;
+  }
+
+  .pdf-upload-zone.uploading .upload-icon {
+    animation: none;
+  }
+
+  .btn-primary:hover:not(:disabled),
+  .article-card:hover,
+  .query-card:hover,
+  .btn-blog:hover:not(:disabled),
+  .copy-btn:hover {
+    transform: none;
+  }
+}
+
+/* Production mode note */
+.production-note {
+  display: block;
+  font-size: 0.8rem;
+  color: #d97706;
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* Table container for horizontal scrolling */
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
