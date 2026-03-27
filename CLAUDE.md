@@ -1,146 +1,59 @@
-# Reverse-Engineer Searcher
+# CLAUDE.md
 
-反向工程搜尋字串生成器 - 從金標準文獻自動產生 PubMed 搜尋策略，並可生成科普衛教文章
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 主要功能
+## 專案概述
 
-1. **搜尋策略生成**：輸入重要文獻 PMIDs，自動產生三種版本的 PubMed 搜尋式（Sensitive / Balanced / Compact）
-2. **多資料庫支援**：自動翻譯為 Embase, Cochrane, CINAHL 等資料庫語法
-3. **AI 科普文章生成**：以輸入的重要文獻為主軸（70-80%），搭配搜尋到的相關文獻為輔（20-30%），生成 2000-2500 字的科普衛教文章
+反向工程搜尋字串生成器：從金標準文獻（PMIDs）自動產生 PubMed 搜尋策略（Sensitive / Balanced / Compact 三種版本），支援多資料庫語法翻譯，並可生成科普衛教文章。
 
-## 專案結構
-
-```
-.
-├── backend/                 # Node.js + Express 後端
-│   ├── src/
-│   │   ├── index.js         # 入口點
-│   │   ├── routes/
-│   │   │   └── searchBuilder.js  # API 路由
-│   │   └── modules/
-│   │       ├── PubMedClient.js   # PubMed API 封裝
-│   │       ├── TermAnalyzer.js   # Term 統計分析
-│   │       ├── LLMService.js     # 多 LLM 支援 + 科普文章生成
-│   │       ├── QueryValidator.js # 搜尋式驗證
-│   │       └── QueryTranslator.js # 多資料庫翻譯
-│   ├── .env                 # 環境變數 (不要提交到 git)
-│   ├── .env.example         # 環境變數範例
-│   └── package.json
-├── frontend/                # React + Vite 前端
-│   ├── src/
-│   │   ├── main.jsx
-│   │   ├── App.jsx          # 含進階 LLM 設定 + 科普文章 UI
-│   │   └── index.css
-│   └── package.json
-├── zeabur.yaml              # Zeabur 部署配置
-├── .gitignore
-└── start.sh                 # 一鍵啟動腳本
-```
-
-## 快速開始
-
-### 1. 啟動服務
+## 開發指令
 
 ```bash
-# 方法一：使用啟動腳本
+# 啟動開發環境（需要兩個 terminal）
+cd backend && npm run dev     # 後端 :3001（node --watch）
+cd frontend && npm run dev    # 前端 :3000（Vite）
+
+# 或一鍵啟動
 ./start.sh
 
-# 方法二：分別啟動
-cd backend && npm run dev    # Terminal 1
-cd frontend && npm run dev   # Terminal 2
+# 前端 build
+cd frontend && npm run build
+
+# 後端測試（ESM，需要 --experimental-vm-modules）
+cd backend && node --experimental-vm-modules node_modules/jest/bin/jest.js
+
+# 測試在 backend/tests/unit/ 下
 ```
 
-### 2. 開啟瀏覽器
-http://localhost:3000
+## 架構
 
-### 3. 使用方式
-1. 輸入 3-5 個金標準文獻的 PMID
-2. 點擊「生成搜尋字串」
-3. 查看生成的三種搜尋式（Sensitive / Balanced / Compact）
-4. 複製適合的搜尋式到 PubMed 使用
-5. （可選）點擊「AI 科普文章生成」區塊中的按鈕，自動生成科普衛教文章
+Monorepo，前後端分離，無根層級 package.json。
 
-## 支援的 LLM Providers
+### 後端 (backend/) — Node.js + Express, ESM modules
 
-| Provider | 說明 | 免費 |
-|----------|------|------|
-| **Groq** | 預設，使用 Llama 3.3 70B | ✅ |
-| OpenAI | GPT-4o / GPT-4o-mini | ❌ |
-| Gemini | Google Gemini 2.0 Flash | ✅ |
-| Grok | xAI Grok | ❌ |
-| Custom | 任何 OpenAI 相容 API | - |
+核心處理流程在 `routes/searchBuilder.js` 的 `/from-pmids` 端點：
+1. **PubMedClient** — 透過 E-utilities API 抓取文章（XML → JSON）
+2. **TermAnalyzer** — 從 MeSH terms 和 keywords 統計詞頻
+3. **LLMService** — 用 LLM 將 terms 分類為 PICO 角色，再生成三種搜尋式
+4. **QueryValidator** — 回 PubMed 驗證搜尋式是否涵蓋所有金標準文章
+5. **QueryTranslator** — 將 PubMed 語法翻譯為 Embase/Cochrane/CINAHL
 
-### 進階設定
+LLMService 用 OpenAI SDK 統一介面，透過不同 baseURL 支援 Groq/OpenAI/Gemini/Grok/Ollama。前端可動態傳入 provider 和 API key，後端在 `sanitizeLLMConfig()` 做安全驗證（生產環境禁止 custom baseURL）。
 
-在前端點擊「進階設定（更換 LLM）」可以：
-- 切換不同的 LLM provider
-- 輸入自己的 API key
-- 選擇不同的模型
-- 測試 LLM 連線
+### 前端 (frontend/) — React 18 + Vite
 
-## API 端點
+`App.jsx` 是主元件，已拆分為多個子元件（`components/` 下）。兩個 custom hooks：
+- `useLLMConfig` — 管理 LLM provider 切換狀態
+- `useBlogGeneration` — 管理科普文章生成流程
 
-### POST /api/search-builder/from-pmids
-根據 PMIDs 生成搜尋策略
+## 部署 (Zeabur)
 
-**Request:**
-```json
-{
-  "pmids": ["12345678", "23456789"],
-  "options": { "maxTermsPerBlock": 10 },
-  "llmConfig": {
-    "provider": "openai",
-    "apiKey": "sk-xxx",
-    "model": "gpt-4o"
-  }
-}
-```
-
-### POST /api/search-builder/validate-query
-驗證單一搜尋式是否涵蓋金標準文章
-
-### GET /api/search-builder/fetch-article/:pmid
-取得單一文章資訊
-
-### POST /api/search-builder/test-llm
-測試 LLM API 連線
-
-### GET /api/search-builder/providers
-取得支援的 LLM providers 列表
-
-### POST /api/search-builder/generate-blog
-生成科普衛教文章
-
-**Request:**
-```json
-{
-  "query_string": "PubMed 搜尋式",
-  "gold_pmids": ["12345678", "23456789"],
-  "topic": "文章主題（可選）",
-  "llmConfig": { ... }
-}
-```
+生產環境將前端 build 產物放到 `backend/public/`，由 Express 提供靜態檔案服務。`zeabur.yaml` 定義 build/start 指令、健康檢查（`/health`）和資源限制。
 
 ## 環境變數
 
-```bash
-# LLM 設定（預設使用 Groq）
-LLM_PROVIDER=groq
-GROQ_API_KEY=xxx
-
-# 其他 LLM（可選）
-OPENAI_API_KEY=
-GEMINI_API_KEY=
-XAI_API_KEY=
-
-# PubMed（可選，提高 rate limit）
-PUBMED_API_KEY=
-
-# Server
-PORT=3001
-```
-
-## 技術棧
-- 後端: Node.js, Express, OpenAI SDK（相容多 LLM）, PubMed E-utilities
-- 前端: React 18, Vite, Axios
-- LLM: Groq (Llama 3.3), OpenAI, Gemini, Grok
+後端 `.env` 檔（參考 `.env.example`）：
+- `LLM_PROVIDER` / `GROQ_API_KEY` — 預設 LLM（Groq）
+- `PUBMED_API_KEY` — 可選，提高 PubMed rate limit
+- `PORT` — 預設 3001
+- `ALLOWED_ORIGINS` — 生產環境 CORS 白名單

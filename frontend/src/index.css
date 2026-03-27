@@ -1851,3 +1851,57 @@ textarea:focus-visible {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 2.5rem 2rem;
+  margin: 1.5rem 0;
+  background: var(--card-bg, #ffffff);
+  border-radius: 12px;
+  border: 1px dashed var(--border-color, #d1d5db);
+}
+
+.empty-state-content h3 {
+  margin-bottom: 1rem;
+  color: var(--text-primary, #1f2937);
+}
+
+.empty-state-content ol {
+  text-align: left;
+  display: inline-block;
+  margin: 0 auto 1.5rem;
+  line-height: 2;
+  color: var(--text-secondary, #4b5563);
+}
+
+.empty-state-hint {
+  font-size: 0.9rem;
+  color: var(--text-muted, #6b7280);
+  font-style: italic;
+}
+
+/* Error Boundary */
+.error-boundary {
+  text-align: center;
+  padding: 3rem 2rem;
+  max-width: 600px;
+  margin: 2rem auto;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #fee2e2;
+}
+
+.error-boundary h2 {
+  color: #dc2626;
+  margin-bottom: 0.5rem;
+}
+
+.error-boundary details {
+  text-align: left;
+  font-size: 0.85rem;
+  color: #6b7280;
+  background: #f9fafb;
+  padding: 1rem;
+  border-radius: 8px;
+}

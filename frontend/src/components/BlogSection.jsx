@@ -1,6 +1,6 @@
-import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import DOMPurify from 'dompurify';
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
 
 /**
  * 部落格生成區段組件
@@ -15,7 +15,7 @@ function BlogSection({
   onGenerateBlog,
   onCopyBlog,
   onExportBlogMd,
-  copiedId
+  copiedId,
 }) {
   if (!queries || queries.length === 0) {
     return null;
@@ -25,7 +25,8 @@ function BlogSection({
     <section className="blog-section" aria-labelledby="blog-heading">
       <h2 id="blog-heading">AI 科普文章生成</h2>
       <p className="section-description">
-        以您提供的重要文獻為主軸（佔 70-80%），搭配搜尋到的相關文獻為輔（佔 20-30%），自動生成一篇約 2000-2500 字的科普衛教文章。
+        以您提供的重要文獻為主軸（佔 70-80%），搭配搜尋到的相關文獻為輔（佔
+        20-30%），自動生成一篇約 2000-2500 字的科普衛教文章。
       </p>
 
       <div className="blog-input-row">
@@ -46,8 +47,12 @@ function BlogSection({
         </div>
         <div className="blog-query-select">
           <label id="query-select-label">選擇搜尋式版本</label>
-          <div className="blog-buttons" role="group" aria-labelledby="query-select-label">
-            {queries.map(query => (
+          <div
+            className="blog-buttons"
+            role="group"
+            aria-labelledby="query-select-label"
+          >
+            {queries.map((query) => (
               <button
                 key={query.id}
                 className="btn btn-blog"
@@ -55,7 +60,9 @@ function BlogSection({
                 disabled={blogLoading}
                 aria-busy={blogLoading}
               >
-                {blogLoading ? '生成中...' : `使用 ${query.label.replace(' Version', '')}`}
+                {blogLoading
+                  ? "生成中..."
+                  : `使用 ${query.label.replace(" Version", "")}`}
               </button>
             ))}
           </div>
@@ -71,7 +78,9 @@ function BlogSection({
 
       {blogError && (
         <div className="error-message" role="alert">
-          <span className="error-icon" aria-hidden="true">❌</span>
+          <span className="error-icon" aria-hidden="true">
+            ❌
+          </span>
           <span className="error-text">{blogError}</span>
         </div>
       )}
@@ -79,81 +88,114 @@ function BlogSection({
       {blogResult && (
         <div className="blog-result">
           <div className="blog-header">
-            <h3>生成的文章</h3>
+            <h3>{blogResult.article ? "生成的文章" : "生成失敗 — 部分結果"}</h3>
             <div className="blog-meta" aria-label="文章資訊">
               <span>主題：{blogResult.metadata?.topic}</span>
-              <span>字數：約 {blogResult.metadata?.charCount} 字</span>
-              <span>主要文獻：{blogResult.metadata?.primarySourceCount || 0} 篇</span>
-              <span>輔助文獻：{blogResult.metadata?.supportingSourceCount || 0} 篇</span>
+              {blogResult.article && (
+                <span>字數：約 {blogResult.metadata?.charCount} 字</span>
+              )}
+              <span>
+                主要文獻：{blogResult.metadata?.primarySourceCount || 0} 篇
+              </span>
+              <span>
+                輔助文獻：{blogResult.metadata?.supportingSourceCount || 0} 篇
+              </span>
             </div>
-            <div className="blog-actions">
-              <button
-                className={`btn btn-secondary ${copiedId === 'blog' ? 'copied' : ''}`}
-                onClick={onCopyBlog}
-                aria-label={copiedId === 'blog' ? '已複製文章' : '複製文章到剪貼簿'}
-              >
-                {copiedId === 'blog' ? '已複製!' : '複製文章'}
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={onExportBlogMd}
-                aria-label="下載 Markdown 檔案"
-              >
-                導出 Markdown
-              </button>
-            </div>
+            {blogResult.article && (
+              <div className="blog-actions">
+                <button
+                  className={`btn btn-secondary ${copiedId === "blog" ? "copied" : ""}`}
+                  onClick={onCopyBlog}
+                  aria-label={
+                    copiedId === "blog" ? "已複製文章" : "複製文章到剪貼簿"
+                  }
+                >
+                  {copiedId === "blog" ? "已複製!" : "複製文章"}
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={onExportBlogMd}
+                  aria-label="下載 Markdown 檔案"
+                >
+                  導出 Markdown
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="blog-content">
-            <article className="blog-article">
-              <ReactMarkdown>
-                {DOMPurify.sanitize(blogResult.article)}
-              </ReactMarkdown>
-            </article>
-          </div>
+          {blogResult.article ? (
+            <div className="blog-content">
+              <article className="blog-article">
+                <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+                  {blogResult.article}
+                </ReactMarkdown>
+              </article>
+            </div>
+          ) : (
+            <div
+              className="blog-content"
+              style={{
+                padding: "2rem",
+                textAlign: "center",
+                color: "var(--text-muted, #6b7280)",
+              }}
+            >
+              <p>
+                文章生成未成功，但以下參考文獻已成功檢索，您可以手動撰寫文章。
+              </p>
+            </div>
+          )}
 
           {blogResult.references?.length > 0 && (
             <div className="blog-references">
               <h4>參考文獻</h4>
               {/* 主要文獻 */}
-              {blogResult.references.filter(ref => ref.isPrimary).length > 0 && (
+              {blogResult.references.filter((ref) => ref.isPrimary).length >
+                0 && (
                 <>
                   <h5 className="ref-category primary">主要文獻（文章核心）</h5>
                   <ul>
-                    {blogResult.references.filter(ref => ref.isPrimary).map((ref, i) => (
-                      <li key={i} className="primary-ref">
-                        <a
-                          href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`在 PubMed 查看 PMID ${ref.pmid}`}
-                        >
-                          PMID: {ref.pmid}
-                        </a>
-                        {' '}- {ref.title} ({ref.journal}, {ref.year})
-                      </li>
-                    ))}
+                    {blogResult.references
+                      .filter((ref) => ref.isPrimary)
+                      .map((ref, i) => (
+                        <li key={i} className="primary-ref">
+                          <a
+                            href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`在 PubMed 查看 PMID ${ref.pmid}`}
+                          >
+                            PMID: {ref.pmid}
+                          </a>{" "}
+                          - {ref.title} ({ref.journal}, {ref.year})
+                        </li>
+                      ))}
                   </ul>
                 </>
               )}
               {/* 輔助文獻 */}
-              {blogResult.references.filter(ref => !ref.isPrimary).length > 0 && (
+              {blogResult.references.filter((ref) => !ref.isPrimary).length >
+                0 && (
                 <>
-                  <h5 className="ref-category supporting">輔助文獻（補充佐證）</h5>
+                  <h5 className="ref-category supporting">
+                    輔助文獻（補充佐證）
+                  </h5>
                   <ul>
-                    {blogResult.references.filter(ref => !ref.isPrimary).map((ref, i) => (
-                      <li key={i} className="supporting-ref">
-                        <a
-                          href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`在 PubMed 查看 PMID ${ref.pmid}`}
-                        >
-                          PMID: {ref.pmid}
-                        </a>
-                        {' '}- {ref.title} ({ref.journal}, {ref.year})
-                      </li>
-                    ))}
+                    {blogResult.references
+                      .filter((ref) => !ref.isPrimary)
+                      .map((ref, i) => (
+                        <li key={i} className="supporting-ref">
+                          <a
+                            href={`https://pubmed.ncbi.nlm.nih.gov/${ref.pmid}/`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`在 PubMed 查看 PMID ${ref.pmid}`}
+                          >
+                            PMID: {ref.pmid}
+                          </a>{" "}
+                          - {ref.title} ({ref.journal}, {ref.year})
+                        </li>
+                      ))}
                   </ul>
                 </>
               )}
