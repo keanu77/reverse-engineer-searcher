@@ -1,3 +1,4 @@
+import { logFailure } from './SafeLogging.js';
 import axios from "axios";
 import { parseStringPromise } from "xml2js";
 
@@ -135,10 +136,7 @@ class PubMedClient {
         const shouldRetry = this._isRetryableError(error);
 
         if (!shouldRetry || attempt === MAX_RETRIES) {
-          console.error(
-            `${operationName} failed after ${attempt} attempt(s):`,
-            error.message,
-          );
+          logFailure("pubmed-request", error);
           throw error;
         }
 
@@ -365,7 +363,7 @@ class PubMedClient {
         keywords: [...new Set(keywords)],
       };
     } catch (error) {
-      console.error("Error parsing article:", error.message);
+      logFailure("Error parsing article:", error);
       return null;
     }
   }
@@ -434,7 +432,7 @@ class PubMedClient {
         query_translation: searchResult.queryTranslation,
       };
     } catch (error) {
-      console.error("Error validating query:", error.message);
+      logFailure("Error validating query:", error);
       throw new Error(`Failed to validate query: ${error.message}`);
     }
   }

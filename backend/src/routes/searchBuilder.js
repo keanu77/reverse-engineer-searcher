@@ -4,22 +4,12 @@ import TermAnalyzer from "../modules/TermAnalyzer.js";
 import LLMService from "../modules/LLMService.js";
 import QueryValidator from "../modules/QueryValidator.js";
 import QueryTranslator from "../modules/QueryTranslator.js";
+import { sanitizeLLMConfig, logFailure, publicError, errorStatus } from "../modules/RequestSecurity.js";
 
 const router = Router();
-const isProduction = process.env.NODE_ENV === "production";
 
 // 初始化翻譯器
 const queryTranslator = new QueryTranslator();
-
-// 允許的 LLM providers 列表
-const ALLOWED_PROVIDERS = [
-  "groq",
-  "openai",
-  "gemini",
-  "grok",
-  "ollama",
-  "custom",
-];
 
 // 輸入驗證限制
 const VALIDATION_LIMITS = {
@@ -32,62 +22,12 @@ const VALIDATION_LIMITS = {
 };
 
 /**
- * 驗證並清理 LLM 配置
- * 安全考量：在生產環境中不允許自訂 baseURL 以防止資料洩漏
- */
-const sanitizeLLMConfig = (llmConfig = {}) => {
-  const provider = (llmConfig.provider || "").toLowerCase();
-
-  // 驗證 provider 是否在允許列表中
-  if (provider && !ALLOWED_PROVIDERS.includes(provider)) {
-    throw new Error(`不支援的 LLM provider: ${provider}`);
-  }
-
-  // 在生產環境中，禁止自訂 baseURL（防止資料洩漏攻擊）
-  if (isProduction && llmConfig.baseURL) {
-    console.warn("Production mode: Custom baseURL rejected for security");
-    throw new Error("生產環境不允許自訂 API 端點");
-  }
-
-  // 在生產環境中，禁止使用 custom provider
-  if (isProduction && provider === "custom") {
-    throw new Error("生產環境不允許使用自訂 provider");
-  }
-
-  // 驗證長度限制
-  if (
-    llmConfig.apiKey &&
-    llmConfig.apiKey.length > VALIDATION_LIMITS.maxApiKeyLength
-  ) {
-    throw new Error("API Key 長度超過限制");
-  }
-  if (
-    llmConfig.baseURL &&
-    llmConfig.baseURL.length > VALIDATION_LIMITS.maxBaseURLLength
-  ) {
-    throw new Error("Base URL 長度超過限制");
-  }
-  if (
-    llmConfig.model &&
-    llmConfig.model.length > VALIDATION_LIMITS.maxModelLength
-  ) {
-    throw new Error("Model 名稱長度超過限制");
-  }
-
-  return {
-    provider: provider || process.env.LLM_PROVIDER || "groq",
-    apiKey: llmConfig.apiKey || undefined,
-    baseURL: (!isProduction && llmConfig.baseURL) || undefined,
-    model: llmConfig.model || undefined,
-  };
-};
-
-/**
  * GET /api/search-builder/providers
  * 取得支援的 LLM providers 列表
  */
 router.get("/providers", (req, res) => {
-  const providers = LLMService.getProviders();
+  const isProduction = process.env.NODE_ENV === "production";
+  const providers = LLMService.getProviders().filter(p => !isProduction || !["custom", "ollama"].includes(p.id));
   res.json({
     providers,
     default: process.env.LLM_PROVIDER || "groq",
@@ -100,32 +40,12 @@ router.get("/providers", (req, res) => {
 const PMID_REGEX = /^[0-9]{1,12}$/;
 
 /**
- * 安全地記錄請求（隱藏敏感資訊）
- */
-const sanitizeLogData = (data) => {
-  const sanitized = { ...data };
-  if (sanitized.llmConfig) {
-    sanitized.llmConfig = {
-      ...sanitized.llmConfig,
-      apiKey: sanitized.llmConfig.apiKey ? "[REDACTED]" : undefined,
-    };
-  }
-  return sanitized;
-};
-
-/**
  * POST /api/search-builder/from-pmids
  * 根據 PMIDs 生成搜尋策略
  */
 router.post("/from-pmids", async (req, res) => {
   try {
     const { pmids, options = {}, llmConfig = {} } = req.body;
-
-    // 記錄請求（隱藏敏感資訊）
-    console.log(
-      "Received request:",
-      sanitizeLogData({ pmids, options, llmConfig }),
-    );
 
     // 1. 驗證輸入
     if (!pmids || !Array.isArray(pmids) || pmids.length === 0) {
@@ -176,7 +96,7 @@ router.post("/from-pmids", async (req, res) => {
     const termAnalyzer = new TermAnalyzer();
 
     // 建立 LLMService（使用經過驗證和清理的配置）
-    const llmOptions = sanitizeLLMConfig(llmConfig);
+    const llmOptions = sanitizeLLMConfig(llmConfig, req);
     const llmService = new LLMService(llmOptions);
 
     const queryValidator = new QueryValidator(pubMedClient);
@@ -284,10 +204,10 @@ router.post("/from-pmids", async (req, res) => {
 
     res.json(response);
   } catch (error) {
-    console.error("Error in /from-pmids:", error);
-    res.status(500).json({
+    logFailure("from-pmids", error);
+    res.status(errorStatus(error)).json({
       error: "Processing failed",
-      message: error.message,
+      message: publicError(error),
     });
   }
 });
@@ -318,10 +238,10 @@ router.post("/validate-query", async (req, res) => {
       ...result,
     });
   } catch (error) {
-    console.error("Error in /validate-query:", error);
-    res.status(500).json({
+    logFailure("validate-query", error);
+    res.status(errorStatus(error)).json({
       error: "Validation failed",
-      message: error.message,
+      message: publicError(error),
     });
   }
 });
@@ -355,10 +275,10 @@ router.get("/fetch-article/:pmid", async (req, res) => {
 
     res.json(articles[0]);
   } catch (error) {
-    console.error("Error in /fetch-article:", error);
-    res.status(500).json({
+    logFailure("fetch-article", error);
+    res.status(errorStatus(error)).json({
       error: "Fetch failed",
-      message: error.message,
+      message: publicError(error),
     });
   }
 });
@@ -434,6 +354,9 @@ router.post("/generate-blog", async (req, res) => {
     );
     console.log("Gold PMIDs (primary sources):", cleanedGoldPmids);
 
+    const llmOptions = sanitizeLLMConfig(llmConfig, req);
+    const llmService = new LLMService(llmOptions);
+
     // 1. 初始化 PubMed Client
     const pubMedClient = new PubMedClient();
 
@@ -480,10 +403,6 @@ router.post("/generate-blog", async (req, res) => {
       `Primary articles: ${primaryArticles.length}, Supporting articles: ${supportingArticles.length}`,
     );
 
-    // 5. 初始化 LLM Service（使用經過驗證和清理的配置）
-    const llmOptions = sanitizeLLMConfig(llmConfig);
-    const llmService = new LLMService(llmOptions);
-
     // 6. 決定主題（如果沒有提供，從主要文章推斷）
     const articleTopic =
       topic ||
@@ -505,10 +424,7 @@ router.post("/generate-blog", async (req, res) => {
         },
       );
     } catch (blogError) {
-      console.error(
-        "Blog generation failed, returning partial result:",
-        blogError.message,
-      );
+      logFailure("blog-partial", blogError);
       // 回傳部分結果：至少有文章清單和主題
       return res.json({
         success: false,
@@ -518,7 +434,7 @@ router.post("/generate-blog", async (req, res) => {
           primarySourceCount: primaryArticles.length,
           supportingSourceCount: supportingArticles.length,
           totalSourceCount: primaryArticles.length + supportingArticles.length,
-          error: blogError.message,
+          error: publicError(blogError),
           generatedAt: new Date().toISOString(),
         },
         references: [...primaryArticles, ...supportingArticles].map((a) => ({
@@ -549,10 +465,10 @@ router.post("/generate-blog", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error generating blog:", error);
-    res.status(500).json({
+    logFailure("generate-blog", error);
+    res.status(errorStatus(error)).json({
       error: "Blog generation failed",
-      message: error.message || "生成部落格文章時發生錯誤",
+      message: publicError(error),
     });
   }
 });
@@ -566,7 +482,7 @@ router.post("/test-llm", async (req, res) => {
     const { provider, apiKey, baseURL, model } = req.body;
 
     // 使用安全的 LLM 配置驗證
-    const llmOptions = sanitizeLLMConfig({ provider, apiKey, baseURL, model });
+    const llmOptions = sanitizeLLMConfig({ provider, apiKey, baseURL, model }, req);
     const llmService = new LLMService(llmOptions);
 
     // 簡單測試，添加超時設定
@@ -602,10 +518,10 @@ router.post("/test-llm", async (req, res) => {
       throw abortError;
     }
   } catch (error) {
-    console.error("Error testing LLM:", error);
-    res.status(400).json({
+    logFailure("test-llm", error);
+    res.status(errorStatus(error)).json({
       success: false,
-      error: isProduction ? "連線測試失敗" : error.message,
+      error: publicError(error, "連線測試失敗，請檢查設定後重試"),
     });
   }
 });

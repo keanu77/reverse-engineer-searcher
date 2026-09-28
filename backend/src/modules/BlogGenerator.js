@@ -1,3 +1,4 @@
+import { logFailure } from './SafeLogging.js';
 /**
  * BlogGenerator - 使用 LLM 生成科普衛教文章
  */
@@ -169,7 +170,7 @@ ${supportingSummaries || '（無輔助文獻）'}
         }))
       };
     } catch (error) {
-      console.error('Error generating blog article:', error.message);
+      logFailure('Error generating blog article:', error);
       throw new Error(`無法生成文章: ${error.message}`);
     }
   }

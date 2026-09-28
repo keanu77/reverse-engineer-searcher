@@ -15,6 +15,9 @@ export const getErrorMessage = (error) => {
   if (status === 400) {
     return { type: 'validation', message: data.message || '輸入格式錯誤，請檢查 PMID' };
   }
+  if (status === 401 || status === 403) {
+    return { type: 'validation', message: data.message || '請檢查 API Key 或服務存取碼' };
+  }
   if (status === 404) {
     return { type: 'not_found', message: data.message || '找不到指定的文章' };
   }

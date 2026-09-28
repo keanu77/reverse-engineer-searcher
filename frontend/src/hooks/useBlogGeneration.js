@@ -11,7 +11,7 @@ export function useBlogGeneration() {
   const [blogError, setBlogError] = useState(null);
   const [blogTopic, setBlogTopic] = useState("");
 
-  const generateBlog = async (queryString, goldPmids, llmConfig = null) => {
+  const generateBlog = async (queryString, goldPmids, llmConfig = null, headers = {}) => {
     setBlogLoading(true);
     setBlogError(null);
     setBlogResult(null);
@@ -34,6 +34,7 @@ export function useBlogGeneration() {
       const response = await axios.post(
         "/api/search-builder/generate-blog",
         requestBody,
+        { headers },
       );
 
       // Handle partial results (search succeeded but article generation failed)
@@ -48,10 +49,9 @@ export function useBlogGeneration() {
       setBlogResult(response.data);
       return response.data;
     } catch (err) {
-      console.error("Blog generation error:", err);
       const errorInfo = getErrorMessage(err);
       setBlogError(errorInfo.message);
-      throw err;
+      return null;
     } finally {
       setBlogLoading(false);
     }

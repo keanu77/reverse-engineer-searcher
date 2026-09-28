@@ -1,3 +1,4 @@
+import { logFailure } from './SafeLogging.js';
 /**
  * TermClassifier - 使用 LLM 將 terms 分類為 PICO 角色
  */
@@ -97,7 +98,7 @@ Respond in JSON format only. Include confidence level (high/medium/low):
         suggested_role: classificationMap.get(t.term.toLowerCase()) || 'Other'
       }));
     } catch (error) {
-      console.error('Error classifying terms:', error.message);
+      logFailure('Error classifying terms:', error);
       return this._classifyTermsFallback(terms, articles);
     }
   }
@@ -145,7 +146,7 @@ ${termList}`;
         suggested_role: classificationMap.get(t.term.toLowerCase()) || 'Other'
       }));
     } catch (error) {
-      console.error('Fallback classification also failed:', error.message);
+      logFailure('Fallback classification also failed:', error);
       return terms.map(t => ({ ...t, suggested_role: 'Other' }));
     }
   }

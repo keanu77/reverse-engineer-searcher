@@ -20,14 +20,14 @@ const PROVIDER_CONFIGS = {
   },
   grok: {
     baseURL: 'https://api.x.ai/v1',
-    defaultModel: 'grok-beta',
-    strongModel: 'grok-beta',
+    defaultModel: 'grok-4.3',
+    strongModel: 'grok-4.3',
     envKey: 'XAI_API_KEY'
   },
   gemini: {
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    defaultModel: 'gemini-2.0-flash',
-    strongModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-3.6-flash',
+    strongModel: 'gemini-3.6-flash',
     envKey: 'GEMINI_API_KEY'
   },
   ollama: {
@@ -51,33 +51,30 @@ class LLMClient {
     // 取得 provider 設定
     const config = PROVIDER_CONFIGS[provider] || PROVIDER_CONFIGS.custom;
 
-    // 決定 API key
-    let apiKey = options.apiKey;
-    if (!apiKey && config.envKey) {
-      apiKey = process.env[config.envKey];
-    }
-    // 對於 Groq，也檢查舊的環境變數名稱
-    if (!apiKey && provider === 'groq') {
-      apiKey = process.env.GROQ_API_KEY;
-    }
+    // Credentials must be explicitly authorized by the request boundary.
+    const apiKey = options.apiKey;
+    if (!apiKey) throw new Error('Explicit LLM credentials required');
 
     // 決定 baseURL
     const baseURL = options.baseURL || config.baseURL;
 
     // 建立 OpenAI 相容客戶端
     this.client = new OpenAI({
-      apiKey: apiKey || 'dummy-key',
-      baseURL: baseURL
+      apiKey,
+      baseURL: baseURL,
+      timeout: 45000,
+      maxRetries: 1,
+      fetch: (url, init) => globalThis.fetch(url, { ...init, redirect: 'error' })
     });
 
     // 設定模型
     this.model = options.model || config.defaultModel;
-    this.strongModel = options.strongModel || config.strongModel || this.model;
+    this.strongModel = options.strongModel || options.model || config.strongModel || this.model;
 
     this.provider = provider;
     this.supportsJsonMode = ['openai', 'groq', 'gemini'].includes(provider);
 
-    console.log(`LLMService initialized: provider=${provider}, model=${this.model}, baseURL=${baseURL}`);
+
   }
 
   /**

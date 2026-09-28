@@ -1,3 +1,4 @@
+import { logFailure } from './SafeLogging.js';
 import PubMedClient from './PubMedClient.js';
 
 /**
@@ -29,13 +30,13 @@ class QueryValidator {
         query_translation: result.query_translation
       };
     } catch (error) {
-      console.error(`Error validating query ${query.id}:`, error.message);
+      logFailure(`Error validating query ${query.id}:`, error);
       return {
         ...query,
         hit_count: null,
         covers_all_gold: false,
         missing_pmids: goldPmids,
-        error: error.message
+        error: 'PubMed 搜尋式驗證暫時失敗，請稍後重試'
       };
     }
   }

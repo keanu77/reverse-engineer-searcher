@@ -4,13 +4,12 @@ import axios from "axios";
 // 預設的 LLM Provider 設定
 export const DEFAULT_PROVIDERS = {
   groq: {
-    name: "Groq (免費)",
+    name: "Groq",
     baseURL: "https://api.groq.com/openai/v1",
     defaultModel: "llama-3.3-70b-versatile",
     models: [
       "llama-3.3-70b-versatile",
-      "llama-3.1-70b-versatile",
-      "mixtral-8x7b-32768",
+      "llama-3.1-8b-instant",
     ],
   },
   openai: {
@@ -22,14 +21,14 @@ export const DEFAULT_PROVIDERS = {
   gemini: {
     name: "Google Gemini",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-    defaultModel: "gemini-2.0-flash",
-    models: ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+    defaultModel: "gemini-3.6-flash",
+    models: ["gemini-3.6-flash", "gemini-3.5-flash-lite"],
   },
   grok: {
     name: "Grok (xAI)",
     baseURL: "https://api.x.ai/v1",
-    defaultModel: "grok-beta",
-    models: ["grok-beta"],
+    defaultModel: "grok-4.3",
+    models: ["grok-4.3"],
   },
   ollama: {
     name: "Ollama (本機)",
@@ -56,6 +55,8 @@ export function useLLMConfig() {
     baseURL: "",
     model: "",
   });
+  const [accessToken, setAccessToken] = useState("");
+  const getRequestHeaders = () => accessToken ? { "X-Service-Token": accessToken } : {};
   const [testingLlm, setTestingLlm] = useState(false);
   const [llmTestResult, setLlmTestResult] = useState(null);
   const [isProduction, setIsProduction] = useState(false);
@@ -77,9 +78,9 @@ export function useLLMConfig() {
   const handleProviderChange = (provider) => {
     const config = DEFAULT_PROVIDERS[provider];
     setLlmConfig({
-      ...llmConfig,
       provider,
-      baseURL: provider === "custom" ? llmConfig.baseURL : "",
+      apiKey: "",
+      baseURL: "",
       model: config?.defaultModel || "",
     });
     setLlmTestResult(null);
@@ -95,7 +96,7 @@ export function useLLMConfig() {
         apiKey: llmConfig.apiKey || undefined,
         baseURL: llmConfig.baseURL || undefined,
         model: llmConfig.model || undefined,
-      });
+      }, { headers: getRequestHeaders() });
 
       setLlmTestResult({
         success: true,
@@ -114,21 +115,19 @@ export function useLLMConfig() {
   const currentProviderConfig = DEFAULT_PROVIDERS[llmConfig.provider];
 
   // 獲取用於 API 請求的 LLM 配置
-  const getLlmConfigForRequest = () => {
-    if (llmConfig.apiKey || llmConfig.provider !== "groq") {
-      return {
-        provider: llmConfig.provider,
-        apiKey: llmConfig.apiKey || undefined,
-        baseURL: llmConfig.baseURL || undefined,
-        model: llmConfig.model || undefined,
-      };
-    }
-    return null;
-  };
+  const getLlmConfigForRequest = () => ({
+    provider: llmConfig.provider,
+    apiKey: llmConfig.apiKey || undefined,
+    baseURL: llmConfig.baseURL || undefined,
+    model: llmConfig.model || undefined,
+  });
 
   return {
     showAdvanced,
     setShowAdvanced,
+    accessToken,
+    setAccessToken,
+    getRequestHeaders,
     llmConfig,
     setLlmConfig,
     testingLlm,

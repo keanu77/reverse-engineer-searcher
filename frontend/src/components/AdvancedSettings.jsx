@@ -5,6 +5,8 @@ import { DEFAULT_PROVIDERS } from '../hooks/useLLMConfig';
  * 進階設定組件 - LLM Provider 設定
  */
 function AdvancedSettings({
+  accessToken,
+  setAccessToken,
   showAdvanced,
   setShowAdvanced,
   llmConfig,
@@ -18,7 +20,7 @@ function AdvancedSettings({
 }) {
   // 在生產環境中過濾掉 custom provider
   const availableProviders = Object.entries(DEFAULT_PROVIDERS).filter(
-    ([key]) => !isProduction || key !== 'custom'
+    ([key]) => !isProduction || !['custom', 'ollama'].includes(key)
   );
 
   return (
@@ -42,8 +44,8 @@ function AdvancedSettings({
           aria-label="LLM 進階設定"
         >
           <h3>LLM Provider 設定</h3>
-          <p className="hint">
-            預設使用免費的 Groq API。您也可以使用自己的 API key 切換到其他 LLM。
+          <p className="hint" id="credential-description">
+            請使用自己的 API Key，或輸入管理者提供的服務存取碼。認證資料僅暫存於目前分頁記憶體，重新整理後清除；請求會經本站後端傳給所選服務。
             {isProduction && (
               <span className="production-note">
                 （生產環境：自訂 API 端點已停用）
@@ -58,7 +60,7 @@ function AdvancedSettings({
                 id="llm-provider"
                 value={llmConfig.provider}
                 onChange={(e) => handleProviderChange(e.target.value)}
-                aria-describedby="provider-description"
+                aria-describedby="credential-description"
               >
                 {availableProviders.map(([key, config]) => (
                   <option key={key} value={key}>{config.name}</option>
@@ -68,17 +70,24 @@ function AdvancedSettings({
 
             <div className="setting-row">
               <label htmlFor="llm-api-key">
-                API Key {llmConfig.provider === 'groq' && '(可選)'}
+                API Key
               </label>
               <input
                 id="llm-api-key"
                 type="password"
                 value={llmConfig.apiKey}
                 onChange={(e) => setLlmConfig({ ...llmConfig, apiKey: e.target.value })}
-                placeholder={llmConfig.provider === 'groq' ? '留空使用預設 key' : '輸入你的 API key'}
-                aria-describedby="api-key-description"
+                placeholder="輸入所選 provider 的 API Key"
+                aria-describedby="credential-description"
                 autoComplete="off"
               />
+            </div>
+
+            <div className="setting-row">
+              <label htmlFor="service-access-token">服務存取碼（使用管理者額度時）</label>
+              <input id="service-access-token" type="password" autoComplete="off"
+                value={accessToken} onChange={event => setAccessToken(event.target.value)}
+                placeholder="自備 API Key 時可留空" aria-describedby="credential-description" />
             </div>
 
             {llmConfig.provider === 'custom' && !isProduction && (

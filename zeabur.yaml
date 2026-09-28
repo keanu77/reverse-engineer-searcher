@@ -7,7 +7,7 @@ start_command: npm start
 
 # Node.js 版本
 runtime: node
-node_version: "18"
+node_version: "24"
 
 # 環境變數（敏感資訊請在 Zeabur 控制台設定）
 env:

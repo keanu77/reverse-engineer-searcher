@@ -1,3 +1,4 @@
+import { logFailure } from './SafeLogging.js';
 /**
  * QueryGenerator - 使用 LLM 生成三種版本的 PubMed 搜尋式
  */
@@ -129,7 +130,7 @@ Respond in JSON format only:
       const result = JSON.parse(jsonMatch[0]);
       return result.queries || [];
     } catch (error) {
-      console.error('Error generating search queries:', error.message);
+      logFailure('Error generating search queries:', error);
       return this._generateQueriesFallback(groupedTerms, articles, options);
     }
   }
@@ -207,7 +208,7 @@ Use proper PubMed syntax with [Mesh], [tiab], AND, OR operators.`;
 
       return queries;
     } catch (error) {
-      console.error('Fallback query generation also failed:', error.message);
+      logFailure('Fallback query generation also failed:', error);
       throw new Error(`Failed to generate search queries: ${error.message}`);
     }
   }
@@ -263,7 +264,7 @@ Return only the modified query string, nothing else.`;
         optimization_note: 'Query optimized to include missing articles'
       };
     } catch (error) {
-      console.error('Error optimizing query:', error.message);
+      logFailure('Error optimizing query:', error);
       return query;
     }
   }

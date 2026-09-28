@@ -5,19 +5,12 @@
   "type": "module",
   "main": "backend/src/index.js",
   "scripts": {
-    "build": "cd backend && npm install && cd ../frontend && npm install && npm run build && mkdir -p ../backend/public && cp -r dist/* ../backend/public/",
+    "build": "npm ci --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend && node scripts/publish-frontend.mjs",
     "start": "node backend/src/index.js",
     "dev": "cd backend && npm run dev"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.12.0"
   },
-  "dependencies": {
-    "axios": "^1.6.2",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "openai": "^4.20.1",
-    "xml2js": "^0.6.2"
-  }
+  "private": true
 }

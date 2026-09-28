@@ -134,7 +134,7 @@ function App() {
       const response = await axios.post(
         "/api/search-builder/from-pmids",
         requestBody,
-        { signal: controller.signal },
+        { signal: controller.signal, headers: llmConfigHook.getRequestHeaders() },
       );
       setLoadingProgress(100);
       setResult(response.data);
@@ -143,7 +143,6 @@ function App() {
         setError("已取消請求");
         setErrorType("validation");
       } else {
-        console.error("Error:", err);
         const errorInfo = getErrorMessage(err);
         setError(errorInfo.message);
         setErrorType(errorInfo.type);
@@ -274,7 +273,7 @@ function App() {
   // 生成部落格文章
   const handleGenerateBlog = async (queryString) => {
     const llmConfig = llmConfigHook.getLlmConfigForRequest();
-    await blogHook.generateBlog(queryString, uniquePmids, llmConfig);
+    await blogHook.generateBlog(queryString, uniquePmids, llmConfig, llmConfigHook.getRequestHeaders());
   };
 
   // 複製部落格文章
