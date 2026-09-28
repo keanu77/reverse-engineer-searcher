@@ -8,8 +8,8 @@ import OpenAI from 'openai';
 const PROVIDER_CONFIGS = {
   groq: {
     baseURL: 'https://api.groq.com/openai/v1',
-    defaultModel: 'llama-3.3-70b-versatile',
-    strongModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'openai/gpt-oss-120b',
+    strongModel: 'openai/gpt-oss-120b',
     envKey: 'GROQ_API_KEY'
   },
   openai: {

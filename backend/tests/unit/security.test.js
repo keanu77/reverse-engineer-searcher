@@ -76,6 +76,22 @@ test('BYOK never falls back to operator key', async () => {
   expect((await response.json()).response).toBe('caller');
 });
 
+test('Groq connection probe uses the current model with bounded reasoning budget', async () => {
+  const response = await post({ provider: 'groq', apiKey: callerKey });
+  expect(response.status).toBe(200);
+  expect(createCompletion.mock.calls[0][0]).toMatchObject({
+    model: 'openai/gpt-oss-120b', max_tokens: 128,
+    reasoning_effort: 'low', include_reasoning: false,
+  });
+});
+
+test('connection probe rejects an empty visible answer instead of reporting success', async () => {
+  createCompletion.mockResolvedValue({ choices: [{ message: { content: '', reasoning: 'fixture reasoning' } }] });
+  const response = await post({ provider: 'groq', apiKey: callerKey });
+  expect(response.status).toBe(502);
+  expect((await response.json()).success).toBe(false);
+});
+
 test('explicit untrusted cross-origin writes are rejected before upstream', async () => {
   expect((await post({ apiKey: callerKey }, { Origin: 'https://untrusted.example' })).status).toBe(403);
   expect(createCompletion).not.toHaveBeenCalled();

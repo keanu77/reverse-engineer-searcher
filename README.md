@@ -20,7 +20,7 @@
 
 - **後端**: Node.js, Express, OpenAI SDK（相容多 LLM）, PubMed E-utilities
 - **前端**: React 18, Vite, Axios
-- **LLM**: Groq (Llama 3.3), OpenAI, Gemini, Grok
+- **LLM**: Groq (GPT-OSS), OpenAI, Gemini, Grok
 
 ## 快速開始
 
@@ -124,7 +124,9 @@ cd ../backend && npm audit
 
 ### 2026-09-28 模型清單核對
 
-移除已停用的 Groq Mixtral／Llama 3.1 70B 選項，保留官方仍列出的 Llama 3.3 70B 與 Llama 3.1 8B（可用性取決於帳號授權）。來源：[Groq 停用公告](https://console.groq.com/docs/deprecations)、[目前模型清單](https://console.groq.com/docs/models)。
+Groq 的 Llama 3.3 70B 與 Llama 3.1 8B 已於 2026-08-16 對免費／開發者方案停用；預設模型改為官方替代方案 `openai/gpt-oss-120b`，另提供 `openai/gpt-oss-20b` 選項，移除舊 Llama／Mixtral 選項。來源：[Groq 停用公告](https://console.groq.com/docs/deprecations)、[目前模型清單](https://console.groq.com/docs/models)。
+
+Groq GPT-OSS 的連線測試使用低推理量與 128 token 上限，並確認有實際回覆；只有 HTTP 成功但內容為空時，不會顯示連線成功。來源：[Groq 推理參數](https://console.groq.com/docs/reasoning)。
 
 Gemini 預設從已關閉的 `gemini-2.0-flash` 更新為官方建議的 `gemini-3.6-flash`，移除舊 1.5 選項；Grok 預設改為官方遷移文件列出的 `grok-4.3`。來源：[Gemini 停用時程](https://ai.google.dev/gemini-api/docs/deprecations)、[xAI 遷移文件](https://docs.x.ai/developers/migration/may-15-retirement)。
 

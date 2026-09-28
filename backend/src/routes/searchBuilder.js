@@ -496,13 +496,19 @@ router.post("/test-llm", async (req, res) => {
           messages: [
             { role: "user", content: 'Say "OK" if you can read this.' },
           ],
-          max_tokens: 10,
+          max_tokens: 128,
+          ...(llmService.provider === 'groq' && llmService.model.startsWith('openai/gpt-oss-')
+            ? { reasoning_effort: 'low', include_reasoning: false }
+            : {}),
         },
         { signal: controller.signal },
       );
 
       clearTimeout(timeoutId);
       const reply = response.choices[0]?.message?.content || "";
+      if (typeof reply !== 'string' || !reply.trim()) {
+        throw new Error('Provider returned no visible completion');
+      }
 
       res.json({
         success: true,
