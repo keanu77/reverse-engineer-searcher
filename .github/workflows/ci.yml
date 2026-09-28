@@ -76,6 +76,8 @@ jobs:
 
       - name: Build production application
         run: npm run build
+        env:
+          NODE_ENV: production
 
       - name: Verify build
         run: |

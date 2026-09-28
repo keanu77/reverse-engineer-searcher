@@ -5,7 +5,7 @@
   "type": "module",
   "main": "backend/src/index.js",
   "scripts": {
-    "build": "npm ci --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend && node scripts/publish-frontend.mjs",
+    "build": "npm ci --prefix backend && npm ci --prefix frontend --include=dev && npm run build --prefix frontend && node scripts/publish-frontend.mjs",
     "start": "node backend/src/index.js",
     "dev": "cd backend && npm run dev"
   },

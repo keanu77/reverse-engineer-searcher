@@ -33,6 +33,8 @@ cd backend && node --experimental-vm-modules node_modules/jest/bin/jest.js
 
 Monorepo，前後端分離；根層級 package.json 統一執行兩個子專案的 npm ci、前端 build，以及將最新產物完整取代 backend/public。不要用累加複製保留舊 bundle。
 
+部署的 NODE_ENV=production 也會影響安裝依賴。前端建置須明確使用 npm ci --include=dev，才能取得 Vite；不要為了建置移除正式環境的 NODE_ENV。
+
 ### 後端 (backend/) — Node.js + Express, ESM modules
 
 核心處理流程在 `routes/searchBuilder.js` 的 `/from-pmids` 端點：
