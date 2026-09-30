@@ -382,11 +382,6 @@ function App() {
               >
                 檢測到 {uniquePmids.length} 個 PMID
               </span>
-              {seedParse.rejected.length > 0 && (
-                <span className="error-text">
-                  無法辨識：{seedParse.rejected.map((r) => `${r.input}（${r.reason}）`).join("、")}
-                </span>
-              )}
               {duplicateCount > 0 && (
                 <span className="duplicate-warning">
                   （已自動移除 {duplicateCount} 個重複）
@@ -401,9 +396,14 @@ function App() {
                 </span>
               )}
             </>
-          ) : (
+          ) : seedParse.rejected.length === 0 ? (
             <span className="hint">
               建議至少 3 篇；篇數越多、主題越一致，詞彙分析越穩定
+            </span>
+          ) : null}
+          {seedParse.rejected.length > 0 && (
+            <span className="error-text">
+              無法辨識：{seedParse.rejected.map((r) => `${r.input}（${r.reason}）`).join("、")}
             </span>
           )}
         </div>
