@@ -1,7 +1,50 @@
 import { logFailure } from './SafeLogging.js';
+import { completionText } from './llmOutput.js';
+import { checkBlogArticle, DISCLAIMER } from './blogChecks.js';
+
 /**
- * BlogGenerator - 使用 LLM 生成科普衛教文章
+ * BlogGenerator - 依文獻摘要生成繁體中文科普衛教文章
+ * 摘要完整送入（含段落標籤）；免責聲明由程式固定附加；輸出後檢查引用、數字與絕對化用語。
  */
+
+const SUPPORTING_SECTIONS = /^(RESULTS?|CONCLUSIONS?|FINDINGS|INTERPRETATION)$/i;
+
+function describeSource(article, index, role) {
+  const lines = [`【${role} ${index + 1}】PMID: ${article.pmid}`, `標題: ${article.title}`];
+  if (article.journal || article.year) lines.push(`期刊: ${[article.journal, article.year].filter(Boolean).join(', ')}`);
+  if (article.publication_types?.length) lines.push(`文獻類型: ${article.publication_types.join('; ')}`);
+  lines.push(`摘要:\n${article.abstract}`);
+  return lines.join('\n');
+}
+
+/** Supporting sources: keep result/conclusion sections, or the abstract end, so findings survive shortening. */
+function supportingAbstract(article) {
+  const sections = (article.abstract_sections || []).filter(s => SUPPORTING_SECTIONS.test(s.label));
+  if (sections.length) return sections.map(s => `${s.label}: ${s.text}`).join('\n');
+  return article.abstract.length > 800 ? `…${article.abstract.slice(-800)}` : article.abstract;
+}
+
+const SYSTEM_PROMPT = `你是醫學科普作者，把研究摘要改寫成一般民眾看得懂的繁體中文（台灣用語）衛教文章。
+
+## 只能根據提供的摘要
+- 每一個研究發現、數字、族群描述都必須來自下方摘要，並在該句句尾標註來源，例如（PMID: 12345678）。
+- 摘要沒寫的數字、樣本數、效果量一律不要寫；資訊不足時直接說「摘要未提供細節」。
+- 背景說明只能寫摘要中提到的內容，不要補充一般醫學知識。
+- 資料不夠時寫短一點，不需要湊字數。
+
+## 證據強度要說清楚
+- 說明每篇研究的類型（隨機對照試驗、觀察性研究、系統性回顧、動物或細胞研究等）。
+- 觀察性研究只能寫「相關」，不能寫成因果。動物或細胞研究不能推論到人類。
+- 單一或小型研究的結果要標明有限。
+
+## 用語限制
+- 禁止絕對化或療效保證用語：保證、根治、治癒、完全預防、百分之百、無副作用、最有效、立即見效。
+- 改用「研究顯示可能有助於」「可降低風險」「仍需更多研究」等措辭。
+- 不提供個人化醫療建議，不寫藥物劑量。
+
+## 格式
+- Markdown，使用小標題。
+- 不要自己寫參考文獻清單或免責聲明（系統會另外附上）。`;
 
 class BlogGenerator {
   constructor(llmClient) {
@@ -10,188 +53,92 @@ class BlogGenerator {
 
   /**
    * 生成科普部落格文章
-   * @param {Array} primaryArticles - 主要文章（用戶提供的 PMID）
-   * @param {Array} supportingArticles - 輔助文章（搜尋到的相關文章）
-   * @param {string} topic - 研究主題
-   * @param {Object} options - 選項
-   * @returns {Object} 生成的文章
+   * @param {Array} primaryArticles - 主要文章（使用者提供的 PMID）
+   * @param {Array} supportingArticles - 輔助文章（檢索到的相關文章）
+   * @param {string} topic - 主題
+   * @param {Object} options - { maxChars }
    */
   async generateBlogArticle(primaryArticles, supportingArticles, topic, options = {}) {
-    const {
-      wordCount = '2000-2500',
-      language = 'zh-TW',
-      tone = 'educational' // educational, professional, casual
-    } = options;
+    const maxChars = Number.isInteger(options.maxChars) ? options.maxChars : 2500;
+    const primary = primaryArticles.filter(a => a.abstract);
+    const supporting = supportingArticles.filter(a => a.abstract);
+    if (primary.length + supporting.length === 0) {
+      throw new Error('所選文獻都沒有摘要，無法依據內容撰寫文章');
+    }
 
-    // 準備主要文章摘要（詳細）
-    const primarySummaries = primaryArticles.map((a, i) => {
-      let summary = `【主要文獻 ${i + 1}】PMID: ${a.pmid}\n   標題: "${a.title}"`;
-      if (a.journal) summary += `\n   期刊: ${a.journal}`;
-      if (a.year) summary += ` (${a.year})`;
-      if (a.abstract) {
-        // 主要文章取完整摘要（最多500字）
-        const abstractPreview = a.abstract.substring(0, 500);
-        summary += `\n   摘要: ${abstractPreview}${a.abstract.length > 500 ? '...' : ''}`;
-      }
-      return summary;
-    }).join('\n\n');
+    const primaryText = primary.map((a, i) => describeSource(a, i, '主要文獻')).join('\n\n');
+    const supportingText = supporting
+      .map((a, i) => describeSource({ ...a, abstract: supportingAbstract(a) }, i, '輔助文獻'))
+      .join('\n\n');
 
-    // 準備輔助文章摘要（簡要）
-    const supportingSummaries = supportingArticles.map((a, i) => {
-      let summary = `【輔助文獻 ${i + 1}】PMID: ${a.pmid}\n   標題: "${a.title}"`;
-      if (a.journal) summary += `\n   期刊: ${a.journal}`;
-      if (a.year) summary += ` (${a.year})`;
-      if (a.abstract) {
-        // 輔助文章取摘要前250字
-        const abstractPreview = a.abstract.substring(0, 250);
-        summary += `\n   摘要: ${abstractPreview}${a.abstract.length > 250 ? '...' : ''}`;
-      }
-      return summary;
-    }).join('\n\n');
+    const userPrompt = `主題：「${topic}」
+篇幅：最多約 ${maxChars} 字，以主要文獻為核心；輔助文獻只用來補充或對照。
 
-    const totalArticles = primaryArticles.length + supportingArticles.length;
+## 主要文獻
+${primaryText || '（無可用的主要文獻摘要）'}
 
-    const systemPrompt = `你是一位專業的醫學科普作家，擅長將複雜的醫學研究轉化為一般大眾能理解的文章。
+## 輔助文獻
+${supportingText || '（無）'}
 
-## 最重要原則：禁止幻覺與虛構
+請撰寫文章：`;
 
-**嚴格禁止任何形式的虛構或幻覺內容：**
-- 只能使用提供的文獻摘要中明確提到的資訊
-- 不要編造任何具體數據、百分比、統計數字（除非文獻摘要中有明確提及）
-- 不要虛構研究結果、樣本數、效果量等
-- 不要假設文獻沒有提到的內容
-- 如果資訊不足，請誠實說明「根據現有研究」而非編造細節
-- 寧可寫得保守、籠統，也不要虛構具體數據
-
-## 文章架構原則（主要 vs 輔助文獻）
-
-**重要：文章內容應以「主要文獻」為核心主軸！**
-- 主要文獻（用戶指定的研究）：這些是文章的核心，應佔 70-80% 的篇幅，詳細介紹其研究目的、方法、發現
-- 輔助文獻（搜尋到的相關研究）：用來補充背景知識、佐證主要發現、或提供不同角度的觀點，佔 20-30% 篇幅
-
-## 寫作原則
-
-1. **主軸明確**: 以主要文獻的研究發現為文章核心
-2. **資料來源**: 所有內容必須來自提供的文獻摘要，不要添加額外資訊
-3. **科學準確性**: 忠實呈現文獻內容，不誇大、不扭曲
-4. **客觀中立**: 平衡呈現，說明研究限制和不確定性
-5. **易於理解**: 避免艱深術語，必要時加以解釋
-6. **誠實透明**: 對於不確定的內容，使用「研究顯示」「可能」「有待進一步研究」等措辭
-
-## 引用方式
-
-- 描述研究發現時，使用如「一項研究發現...」「根據 2023 年發表的研究...」
-- 不要編造作者姓名或機構名稱（除非摘要中有提及）
-- 使用 PMID 作為引用依據
-
-## 文章結構建議（約 ${wordCount} 字）
-
-1. **引言** (約250字): 說明為什麼這個主題重要，引起讀者興趣
-2. **背景知識** (約350字): 簡單介紹相關的基礎知識（可引用輔助文獻）
-3. **主要研究發現** (約800-1000字): 詳細介紹主要文獻的研究內容、方法與發現
-4. **相關研究佐證** (約300字): 引用輔助文獻補充或佐證主要發現
-5. **實際意義** (約350字): 這些研究對一般人有什麼意義（但不要給出具體醫療建議）
-6. **限制與展望** (約200字): 研究限制、需要更多研究的地方
-7. **結語** (約150字): 總結重點，提醒讀者諮詢專業醫療人員
-
-## 格式要求
-
-- 使用 Markdown 格式
-- 適當使用小標題、條列式
-- 字數約 ${wordCount} 字
-- 使用繁體中文 (台灣用語)
-- 不要在文章中列出參考文獻（參考文獻會另外顯示）
-- 結尾加上免責聲明：本文僅供參考，不構成醫療建議，如有健康問題請諮詢專業醫療人員`;
-
-    const userPrompt = `請根據以下文獻，撰寫一篇關於「${topic}」的科普衛教文章。
-
-## 主要文獻（文章核心，需詳細介紹，佔 70-80% 篇幅）
-
-${primarySummaries || '（無主要文獻）'}
-
-## 輔助文獻（補充背景與佐證，佔 20-30% 篇幅）
-
-${supportingSummaries || '（無輔助文獻）'}
-
-## 嚴格要求
-
-1. **以主要文獻為主軸**：詳細介紹主要文獻的研究內容，輔助文獻用於補充
-2. **禁止幻覺**：只能使用上述文獻摘要中明確提到的資訊，不要編造任何數據或結果
-3. 如果摘要資訊不夠詳細，請用「研究顯示」「根據研究」等籠統說法，不要虛構具體數字
-4. 字數：約 ${wordCount} 字
-5. 語言：繁體中文（台灣用語）
-6. 風格：科普衛教，客觀但易懂
-7. 目標讀者：一般大眾、對健康議題有興趣的民眾
-8. 結尾必須包含免責聲明
-
-請開始撰寫文章：`;
-
+    let content;
     try {
-      console.log(`Generating blog article about "${topic}" based on ${primaryArticles.length} primary + ${supportingArticles.length} supporting articles...`);
-
       const response = await this.llmClient.client.chat.completions.create({
         model: this.llmClient.strongModel,
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3, // 降低 temperature 以減少幻覺
-        max_tokens: 5000
+        temperature: 0.2,
+        max_tokens: 8000
       });
-
-      const content = response.choices[0].message.content;
-
-      // 計算字數
-      const charCount = content.replace(/\s/g, '').length;
-
-      // 合併所有參考文獻
-      const allArticles = [...primaryArticles, ...supportingArticles];
-
-      return {
-        success: true,
-        article: content,
-        metadata: {
-          topic,
-          primarySourceCount: primaryArticles.length,
-          supportingSourceCount: supportingArticles.length,
-          totalSourceCount: totalArticles,
-          charCount,
-          wordCountTarget: wordCount,
-          generatedAt: new Date().toISOString(),
-          model: this.llmClient.strongModel,
-          provider: this.llmClient.provider
-        },
-        references: allArticles.map(a => ({
-          pmid: a.pmid,
-          title: a.title,
-          journal: a.journal,
-          year: a.year,
-          isPrimary: primaryArticles.some(p => p.pmid === a.pmid)
-        }))
-      };
+      content = completionText(response);
     } catch (error) {
       logFailure('Error generating blog article:', error);
-      throw new Error(`無法生成文章: ${error.message}`);
+      throw new Error(`無法生成文章：${error.message}`);
     }
+
+    const sources = [...primary, ...supporting];
+    const { warnings, citedPmids } = checkBlogArticle(content, sources);
+    const article = `${content}\n\n---\n\n${DISCLAIMER}`;
+    const excluded = [...primaryArticles, ...supportingArticles].filter(a => !a.abstract);
+
+    return {
+      success: true,
+      article,
+      quality_warnings: [
+        ...warnings,
+        ...(excluded.length ? [`以下文獻沒有摘要，未納入撰寫：PMID ${excluded.map(a => a.pmid).join(', ')}`] : []),
+      ],
+      metadata: {
+        topic,
+        primarySourceCount: primary.length,
+        supportingSourceCount: supporting.length,
+        totalSourceCount: sources.length,
+        charCount: content.replace(/[\s#*>_`-]/g, '').length,
+        maxChars,
+        generatedAt: new Date().toISOString(),
+        model: this.llmClient.strongModel,
+        provider: this.llmClient.provider
+      },
+      references: sources.map(a => ({
+        pmid: a.pmid,
+        title: a.title,
+        journal: a.journal,
+        year: a.year,
+        publication_types: a.publication_types || [],
+        isPrimary: primary.includes(a),
+        isCited: citedPmids.includes(String(a.pmid))
+      }))
+    };
   }
 
   /**
-   * 從文章標題推斷研究主題
+   * 沒有指定主題時，以主要文獻的完整標題作為主題
    */
   inferTopicFromArticles(articles) {
-    if (!articles || articles.length === 0) {
-      return '醫學研究';
-    }
-
-    // 取第一篇文章的標題作為基礎
-    const firstTitle = articles[0].title || '';
-
-    // 嘗試找出共同的關鍵詞
-    const allTitles = articles.map(a => a.title || '').join(' ');
-
-    // 簡單的主題推斷：使用第一篇文章的主要主題
-    // 實際應用中可以用更複雜的 NLP
-    return firstTitle.length > 50 ? firstTitle.substring(0, 50) + '...' : firstTitle;
+    return articles?.find(a => a.title)?.title || '醫學研究';
   }
 }
 

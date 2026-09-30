@@ -109,19 +109,25 @@ describe('TermAnalyzer', () => {
     });
   });
 
-  describe('formatTermForPubMed', () => {
-    test('should format MeSH term with [Mesh] tag', () => {
-      const term = { term: 'Knee Injuries', source: 'MeSH-major' };
-      const result = analyzer.formatTermForPubMed(term, false);
-      expect(result).toBe('"Knee Injuries"[Mesh]');
+  describe('ranking and spelling', () => {
+    test('MeSH-major ranks before MeSH and keyword at equal frequency', () => {
+      const terms = analyzer.analyzeArticles([
+        { pmid: '1', mesh_major: ['Zeta Major'], mesh_all: ['Zeta Major', 'Alpha Minor'], keywords: ['beta kw'] },
+      ]);
+      expect(terms.map((t) => t.source)).toEqual(['MeSH-major', 'MeSH', 'keyword']);
     });
 
-    test('should include tiab variants when requested', () => {
-      const term = { term: 'Knee Injuries', source: 'MeSH' };
-      const result = analyzer.formatTermForPubMed(term, true);
-      expect(result).toContain('[Mesh]');
-      expect(result).toContain('[tiab]');
-      expect(result).toContain('OR');
+    test('keeps the MeSH spelling when a keyword appears first', () => {
+      const terms = analyzer.analyzeArticles([
+        { pmid: '1', mesh_major: [], mesh_all: [], keywords: ['knee injuries'] },
+        { pmid: '2', mesh_major: [], mesh_all: ['Knee Injuries'], keywords: [] },
+      ]);
+      expect(terms[0].term).toBe('Knee Injuries');
+    });
+
+    test('age groups are not discarded as generic', () => {
+      const terms = analyzer.analyzeArticles([{ pmid: '1', mesh_major: [], mesh_all: ['Child', 'Humans'], keywords: [] }]);
+      expect(analyzer.filterTerms(terms).map((t) => t.term)).toEqual(['Child']);
     });
   });
 });

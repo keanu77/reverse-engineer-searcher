@@ -8,12 +8,11 @@
 
 ## 功能特色
 
-- **自動生成搜尋策略**：輸入重要文獻的 PMIDs，自動分析 MeSH 詞彙並產生三種版本的搜尋式
-  - Sensitive Version（敏感版）：最大化召回率
-  - Balanced Version（平衡版）：精確率與召回率平衡
-  - Compact Version（精簡版）：最大化精確率
-- **多資料庫支援**：自動翻譯為 Embase, Cochrane, CINAHL 等資料庫語法
-- **AI 科普文章生成**：以用戶提供的重要文獻為主軸（70-80%），搭配搜尋到的相關文獻為輔（20-30%），生成 2000-2500 字的科普衛教文章
+- **自動生成搜尋策略**：輸入種子文獻的 PMIDs，分析 MeSH 詞彙與關鍵字，由 LLM 產生三種版本的 PubMed 檢索式（Sensitive／Balanced／Compact 是策略意圖，不保證召回或精確度）
+- **PubMed 驗證**：以「檢索式 AND 種子 PMID」的交集判斷涵蓋，不受 ESearch 只回傳前 10,000 筆的限制；PubMed 回報的找不到片語、實際執行的查詢（Search Details）都會顯示
+- **驗證組（選填）**：另給未參與建構的 PMID，獨立檢查檢索式對「沒看過的文獻」的涵蓋，對應 Hausner et al. (2012) 客觀法的開發／驗證分組概念
+- **多資料庫語法草稿**：先解析 PubMed 語法再轉為 Embase (Ovid)、Cochrane Library、Web of Science、Scopus；MeSH→Emtree、出版類型等無法等價轉換之處都附警告，須在各資料庫確認
+- **AI 科普文章生成**：以使用者提供的主要文獻為核心、檢索結果為輔；送入完整摘要，逐句標註 PMID，程式固定附加免責聲明，並檢查未知引用、摘要中沒有的數字與絕對化療效用語
 - **多 LLM 支援**：預設使用 Groq API（依帳號可用模型與額度），也支援 OpenAI、Gemini、Grok 等
 
 ## 技術棧
@@ -79,17 +78,18 @@ cd ..
 
 ## 使用說明
 
-1. 輸入 3-5 個金標準文獻的 PMID（以逗號、空格或換行分隔）
-2. 點擊「生成搜尋字串」
-3. 查看生成的三種搜尋式，選擇適合的版本
-4. 切換不同資料庫標籤，複製對應語法
-5. （可選）點擊「AI 科普文章生成」生成衛教文章
+1. 輸入 3–10 個種子文獻的 PMID（數字、`PMID: 123` 或 PubMed 網址；PMCID 與 DOI 會被退回）
+2. （建議）在「驗證組」輸入幾篇同樣應被找到、但不拿來建構的 PMID
+3. 點擊「生成搜尋字串」，檢查每條策略的 PubMed 驗證狀態、種子涵蓋、驗證組涵蓋與警告
+4. 切換資料庫標籤複製語法草稿，並在該資料庫用種子文獻確認能被找到
+5. （可選）生成科普文章，發布前處理「發布前請先處理」中的每一項
+
+種子涵蓋率只代表這組種子文獻，不是對所有相關文獻的召回率。正式系統性回顧仍需資訊專家審閱（例如 PRESS）與完整的檢索紀錄。
 
 ## API 端點
 
 - `POST /api/search-builder/from-pmids` - 生成搜尋策略
 - `POST /api/search-builder/generate-blog` - 生成科普文章
-- `POST /api/search-builder/validate-query` - 驗證搜尋式
 - `GET /api/search-builder/fetch-article/:pmid` - 取得文章資訊
 - `POST /api/search-builder/test-llm` - 測試 LLM 連線
 

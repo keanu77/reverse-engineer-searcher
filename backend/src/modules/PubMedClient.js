@@ -1,6 +1,6 @@
 import { logFailure } from './SafeLogging.js';
 import axios from "axios";
-import { parseStringPromise } from "xml2js";
+import { parsePubmedXml } from "./pubmedXml.js";
 
 const PUBMED_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
@@ -156,6 +156,7 @@ class PubMedClient {
    * 判斷錯誤是否可重試
    */
   _isRetryableError(error) {
+    if (error.retryable === false) return false;
     // 網路錯誤
     if (!error.response) {
       return true;
@@ -178,264 +179,141 @@ class PubMedClient {
   }
 
   /**
-   * 根據 PMIDs 取得文章的完整 metadata（包含 MeSH terms 和 keywords）
+   * POST 到 E-utilities（長檢索式不受 URL 長度限制）
+   */
+  _post(endpoint, params) {
+    return this.axiosInstance.post(endpoint, new URLSearchParams(this._buildParams(params)).toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+  }
+
+  /**
+   * 根據 PMIDs 取得文章 metadata，依輸入順序回傳
    * @param {string[]} pmids - PMID 陣列
-   * @returns {Promise<Object[]>} 文章資料陣列
+   * @returns {Promise<{articles: Object[], missingPmids: string[]}>}
    */
   async fetchArticlesByPmids(pmids) {
-    if (!pmids || pmids.length === 0) {
-      return { articles: [], missingPmids: [] };
-    }
+    const requested = [...new Set((pmids || []).map((p) => String(p).trim()))];
+    if (requested.length === 0) return { articles: [], missingPmids: [] };
 
-    // 先檢查快取
-    const cachedArticles = [];
-    const uncachedPmids = [];
-
-    for (const pmid of pmids) {
+    const found = new Map();
+    for (const pmid of requested) {
       const cached = this._getCachedArticle(pmid);
-      if (cached) {
-        cachedArticles.push(cached);
-        console.log(`Cache hit for PMID: ${pmid}`);
-      } else {
-        uncachedPmids.push(pmid);
-      }
+      if (cached) found.set(pmid, cached);
     }
+    const uncached = requested.filter((pmid) => !found.has(pmid));
 
-    // 如果所有文章都在快取中
-    if (uncachedPmids.length === 0) {
-      console.log(`All ${pmids.length} articles served from cache`);
-      const foundPmids = cachedArticles.map((a) => a.pmid);
-      const missingPmids = pmids.filter((p) => !foundPmids.includes(p));
-      return { articles: cachedArticles, missingPmids };
-    }
-
-    // 只取得未快取的文章
-    console.log(
-      `Fetching ${uncachedPmids.length} articles from PubMed (${cachedArticles.length} from cache)`,
-    );
-
-    return this._withRetry(async () => {
-      // 使用 efetch 取得完整的 XML 資料（包含 MeSH 和 Keywords）
-      const response = await this.axiosInstance.get("/efetch.fcgi", {
-        params: this._buildParams({
+    if (uncached.length > 0) {
+      const fetched = await this._withRetry(async () => {
+        const response = await this._post("/efetch.fcgi", {
           db: "pubmed",
-          id: uncachedPmids.join(","),
+          id: uncached.join(","),
           rettype: "xml",
           retmode: "xml",
-        }),
-      });
-
-      const parsed = await parseStringPromise(response.data, {
-        explicitArray: false,
-        mergeAttrs: true,
-      });
-
-      const fetchedArticles = [];
-      const pubmedArticleSet = parsed.PubmedArticleSet;
-
-      if (!pubmedArticleSet || !pubmedArticleSet.PubmedArticle) {
-        // 沒有找到新文章，但可能有快取的
-        const allArticles = [...cachedArticles];
-        const foundPmids = allArticles.map((a) => a.pmid);
-        const missingPmids = pmids.filter((p) => !foundPmids.includes(p));
-        return { articles: allArticles, missingPmids };
+        });
+        return parsePubmedXml(response.data);
+      }, "fetchArticlesByPmids");
+      for (const article of fetched) {
+        found.set(article.pmid, article);
+        this._cacheArticle(article);
       }
-
-      // 確保是陣列
-      const articleList = Array.isArray(pubmedArticleSet.PubmedArticle)
-        ? pubmedArticleSet.PubmedArticle
-        : [pubmedArticleSet.PubmedArticle];
-
-      for (const articleData of articleList) {
-        const article = this._parseArticle(articleData);
-        if (article) {
-          fetchedArticles.push(article);
-          // 存入快取
-          this._cacheArticle(article);
-        }
-      }
-
-      // 合併快取和新取得的文章
-      const allArticles = [...cachedArticles, ...fetchedArticles];
-
-      // 標記找不到的 PMIDs
-      const foundPmids = allArticles.map((a) => a.pmid);
-      const missingPmids = pmids.filter((p) => !foundPmids.includes(p));
-
-      return {
-        articles: allArticles,
-        missingPmids,
-      };
-    }, "fetchArticlesByPmids");
-  }
-
-  /**
-   * 解析單篇文章的 XML 資料
-   */
-  _parseArticle(articleData) {
-    try {
-      const medlineCitation = articleData.MedlineCitation;
-      if (!medlineCitation) return null;
-
-      const pmid = medlineCitation.PMID?._ || medlineCitation.PMID;
-      const article = medlineCitation.Article;
-
-      if (!article) return null;
-
-      // 取得標題
-      const title = article.ArticleTitle?._ || article.ArticleTitle || "";
-
-      // 取得摘要
-      let abstract = "";
-      if (article.Abstract?.AbstractText) {
-        const abstractText = article.Abstract.AbstractText;
-        if (Array.isArray(abstractText)) {
-          abstract = abstractText.map((t) => t._ || t).join(" ");
-        } else {
-          abstract = abstractText._ || abstractText;
-        }
-      }
-
-      // 取得期刊名稱
-      const journal =
-        article.Journal?.Title || article.Journal?.ISOAbbreviation || "";
-
-      // 取得發表年份
-      let year = "";
-      const pubDate = article.Journal?.JournalIssue?.PubDate;
-      if (pubDate) {
-        year = pubDate.Year || pubDate.MedlineDate?.substring(0, 4) || "";
-      }
-
-      // 取得 MeSH Terms
-      const meshHeadings = medlineCitation.MeshHeadingList?.MeshHeading || [];
-      const meshList = Array.isArray(meshHeadings)
-        ? meshHeadings
-        : [meshHeadings];
-
-      const meshMajor = [];
-      const meshAll = [];
-
-      for (const mesh of meshList) {
-        if (!mesh.DescriptorName) continue;
-
-        const descriptorName = mesh.DescriptorName._ || mesh.DescriptorName;
-        const isMajor = mesh.DescriptorName.MajorTopicYN === "Y";
-
-        meshAll.push(descriptorName);
-        if (isMajor) {
-          meshMajor.push(descriptorName);
-        }
-
-        // 也處理 Qualifiers（若需要更細緻的 MeSH 資訊）
-        if (mesh.QualifierName) {
-          const qualifiers = Array.isArray(mesh.QualifierName)
-            ? mesh.QualifierName
-            : [mesh.QualifierName];
-          for (const qual of qualifiers) {
-            const qualName = qual._ || qual;
-            if (qual.MajorTopicYN === "Y") {
-              meshMajor.push(`${descriptorName}/${qualName}`);
-            }
-          }
-        }
-      }
-
-      // 取得 Author Keywords
-      const keywordList = medlineCitation.KeywordList?.Keyword || [];
-      const keywords = [];
-      const kwList = Array.isArray(keywordList) ? keywordList : [keywordList];
-      for (const kw of kwList) {
-        const keyword = kw._ || kw;
-        if (keyword) {
-          keywords.push(keyword);
-        }
-      }
-
-      return {
-        pmid: String(pmid),
-        title,
-        abstract,
-        journal,
-        year: String(year),
-        mesh_major: [...new Set(meshMajor)],
-        mesh_all: [...new Set(meshAll)],
-        keywords: [...new Set(keywords)],
-      };
-    } catch (error) {
-      logFailure("Error parsing article:", error);
-      return null;
     }
+
+    return {
+      articles: requested.filter((pmid) => found.has(pmid)).map((pmid) => found.get(pmid)),
+      missingPmids: requested.filter((pmid) => !found.has(pmid)),
+    };
   }
 
   /**
-   * 執行 PubMed 搜尋並取得命中數量和 PMID 列表
+   * 執行 PubMed 搜尋，回傳命中數、PMID 與 PubMed 的錯誤／警告
    * @param {string} query - PubMed 搜尋字串
    * @param {Object|number} options - 選項物件或 retmax 數字（向下相容）
-   * @returns {Promise<Object>} { count, pmids }
    */
   async searchPubMed(query, options = {}) {
-    // 向下相容：如果傳入數字，當作 retmax
-    const opts =
-      typeof options === "number" ? { maxResults: options } : options;
-
+    const opts = typeof options === "number" ? { maxResults: options } : options || {};
     const { maxResults = 500, sort = "relevance" } = opts;
 
     return this._withRetry(async () => {
-      const response = await this.axiosInstance.get("/esearch.fcgi", {
-        params: this._buildParams({
-          db: "pubmed",
-          term: query,
-          retmax: maxResults,
-          retmode: "json",
-          usehistory: "n",
-          sort: sort, // 'relevance' 或 'pub_date'
-        }),
+      const response = await this._post("/esearch.fcgi", {
+        db: "pubmed",
+        term: query,
+        retmax: maxResults,
+        retmode: "json",
+        sort,
       });
-
-      const result = response.data.esearchresult;
-
-      if (result.errorlist?.phrasesnotfound?.length > 0) {
-        console.warn(
-          "Some phrases not found:",
-          result.errorlist.phrasesnotfound,
-        );
-      }
-
-      return {
-        count: parseInt(result.count, 10),
-        pmids: result.idlist || [],
-        queryTranslation: result.querytranslation || "",
-      };
+      return interpretESearch(response.data);
     }, "searchPubMed");
   }
 
   /**
-   * 驗證特定 PMIDs 是否在搜尋結果中
+   * 驗證檢索式是否涵蓋金標準 PMIDs。
+   * 以「檢索式 AND 金標準 PMID」的交集判斷，不受 ESearch 只回傳前 10,000 筆的限制。
    * @param {string} query - PubMed 搜尋字串
-   * @param {string[]} goldPmids - 要檢查的 PMID 陣列
-   * @returns {Promise<Object>} 驗證結果
+   * @param {Array<string|number>} goldPmids - 要檢查的 PMID
    */
   async validateQueryCoversGoldPmids(query, goldPmids) {
-    try {
-      // 先取得搜尋結果
-      const searchResult = await this.searchPubMed(query, 10000);
+    const gold = [...new Set(goldPmids.map((p) => String(p).trim()))].filter((p) => /^\d+$/.test(p));
+    if (gold.length === 0) throw new Error("沒有有效的金標準 PMID");
 
-      // 檢查 gold PMIDs 是否都在結果中
-      const hitPmidSet = new Set(searchResult.pmids);
-      const missingPmids = goldPmids.filter((pmid) => !hitPmidSet.has(pmid));
+    const total = await this.searchPubMed(query, { maxResults: 0 });
+    const intersection = await this.searchPubMed(
+      `(${query}) AND (${gold.map((pmid) => `${pmid}[uid]`).join(" OR ")})`,
+      { maxResults: gold.length },
+    );
+    const captured = new Set(intersection.pmids);
+    const missing = gold.filter((pmid) => !captured.has(pmid));
 
-      return {
-        hit_count: searchResult.count,
-        covers_all_gold: missingPmids.length === 0,
-        missing_pmids: missingPmids,
-        query_translation: searchResult.queryTranslation,
-      };
-    } catch (error) {
-      logFailure("Error validating query:", error);
-      throw new Error(`Failed to validate query: ${error.message}`);
-    }
+    return {
+      hit_count: total.count,
+      captured_pmids: gold.filter((pmid) => captured.has(pmid)),
+      missing_pmids: missing,
+      covers_all_gold: missing.length === 0,
+      query_translation: total.queryTranslation,
+      pubmed_errors: total.errors,
+      pubmed_warnings: total.warnings,
+    };
   }
+}
+
+const ERROR_LABELS = {
+  phrasesnotfound: "PubMed 找不到片語",
+  fieldsnotfound: "PubMed 不認得的欄位",
+};
+const WARNING_LABELS = {
+  quotedphrasesnotfound: "PubMed 找不到引號片語",
+  phrasesignored: "PubMed 忽略的字",
+  outputmessages: "PubMed 訊息",
+};
+
+function listMessages(group, labels) {
+  return Object.entries(labels).flatMap(([key, label]) =>
+    (Array.isArray(group?.[key]) ? group[key] : []).map((item) => `${label}：${item}`),
+  );
+}
+
+/**
+ * 解讀 ESearch JSON。語法錯誤不重試；缺少有效 count 視為錯誤而不是零筆。
+ */
+function interpretESearch(data) {
+  const result = data?.esearchresult;
+  const fatal = result?.ERROR || data?.error;
+  if (fatal) {
+    const error = new Error(`PubMed 無法執行此檢索式：${fatal}`);
+    error.retryable = false;
+    throw error;
+  }
+  const count = Number(result?.count);
+  if (!result || !Number.isSafeInteger(count) || count < 0) {
+    throw new Error("PubMed 回應格式異常，無法取得命中數");
+  }
+  return {
+    count,
+    pmids: Array.isArray(result.idlist) ? result.idlist.map(String) : [],
+    queryTranslation: result.querytranslation || "",
+    errors: listMessages(result.errorlist, ERROR_LABELS),
+    warnings: listMessages(result.warninglist, WARNING_LABELS),
+  };
 }
 
 export default PubMedClient;

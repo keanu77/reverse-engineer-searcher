@@ -21,10 +21,6 @@ export function useBlogGeneration() {
         query_string: queryString,
         gold_pmids: goldPmids,
         topic: blogTopic || undefined,
-        options: {
-          wordCount: "2000-2500",
-          language: "zh-TW",
-        },
       };
 
       if (llmConfig) {

@@ -1,4 +1,5 @@
 import { logFailure } from './SafeLogging.js';
+import { completionText, extractJsonObject, normaliseRole, normaliseTermKey } from './llmOutput.js';
 /**
  * TermClassifier - 使用 LLM 將 terms 分類為 PICO 角色
  */
@@ -71,7 +72,7 @@ Respond in JSON format only. Include confidence level (high/medium/low):
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3
+        temperature: 0
       };
 
       // 只有支援 JSON mode 的 provider 才加上
@@ -80,23 +81,14 @@ Respond in JSON format only. Include confidence level (high/medium/low):
       }
 
       const response = await this.llmClient.client.chat.completions.create(requestOptions);
-      const content = response.choices[0].message.content;
-
-      // 嘗試解析 JSON
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON found in response');
+      const result = extractJsonObject(completionText(response));
+      if (!Array.isArray(result.classifications)) throw new Error('classifications 不是陣列');
+      const roles = new Map();
+      for (const item of result.classifications) {
+        const role = normaliseRole(item?.role);
+        if (typeof item?.term === 'string' && role) roles.set(normaliseTermKey(item.term), role);
       }
-
-      const result = JSON.parse(jsonMatch[0]);
-      const classificationMap = new Map(
-        result.classifications.map(c => [c.term.toLowerCase(), c.role])
-      );
-
-      return terms.map(t => ({
-        ...t,
-        suggested_role: classificationMap.get(t.term.toLowerCase()) || 'Other'
-      }));
+      return applyRoles(terms, roles, 'llm');
     } catch (error) {
       logFailure('Error classifying terms:', error);
       return this._classifyTermsFallback(terms, articles);
@@ -104,7 +96,7 @@ Respond in JSON format only. Include confidence level (high/medium/low):
   }
 
   /**
-   * 備用分類方法
+   * 備用分類方法：每行「term | role」
    */
   async _classifyTermsFallback(terms, articles) {
     const articleSummaries = articles.map(a => `PMID ${a.pmid}: ${a.title}`).join('\n');
@@ -123,33 +115,31 @@ ${termList}`;
       const response = await this.llmClient.client.chat.completions.create({
         model: this.llmClient.model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
+        temperature: 0
       });
 
-      const content = response.choices[0].message.content;
-      const lines = content.split('\n').filter(l => l.includes('|'));
-
-      const classificationMap = new Map();
-      for (const line of lines) {
-        const parts = line.split('|').map(s => s.trim());
-        if (parts.length >= 2) {
-          const term = parts[0].replace(/^-\s*/, '').toLowerCase();
-          const role = parts[1].toUpperCase().charAt(0);
-          if (['P', 'I', 'O', 'D'].includes(role)) {
-            classificationMap.set(term, role);
-          }
-        }
+      const roles = new Map();
+      for (const line of completionText(response).split('\n')) {
+        const parts = line.replace(/^\s*[-*]?\s*\|?|\|\s*$/g, '').split('|').map(s => s.trim()).filter(Boolean);
+        const role = parts.length >= 2 ? normaliseRole(parts[1]) : null;
+        if (role) roles.set(normaliseTermKey(parts[0]), role);
       }
-
-      return terms.map(t => ({
-        ...t,
-        suggested_role: classificationMap.get(t.term.toLowerCase()) || 'Other'
-      }));
+      return applyRoles(terms, roles, 'fallback');
     } catch (error) {
       logFailure('Fallback classification also failed:', error);
-      return terms.map(t => ({ ...t, suggested_role: 'Other' }));
+      return terms.map(t => ({ ...t, suggested_role: 'Other', classification_status: 'failed' }));
     }
   }
+}
+
+/** Attach roles; terms the model did not return stay "Other" and are marked unclassified. */
+function applyRoles(terms, roles, source) {
+  return terms.map(t => {
+    const role = roles.get(normaliseTermKey(t.term));
+    return role
+      ? { ...t, suggested_role: role, classification_status: 'classified', classification_source: source }
+      : { ...t, suggested_role: 'Other', classification_status: 'unclassified', classification_source: source };
+  });
 }
 
 export { TermClassifier };

@@ -30,10 +30,6 @@ class LLMService extends LLMClient {
   inferTopicFromArticles(articles) {
     return this._blogGenerator.inferTopicFromArticles(articles);
   }
-
-  async optimizeQuery(query, missingPmids, articles) {
-    return this._queryGenerator.optimizeQuery(query, missingPmids, articles);
-  }
 }
 
 export default LLMService;

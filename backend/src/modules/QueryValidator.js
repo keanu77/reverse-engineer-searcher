@@ -2,140 +2,115 @@ import { logFailure } from './SafeLogging.js';
 import PubMedClient from './PubMedClient.js';
 
 /**
- * QueryValidator - 驗證搜尋式是否能涵蓋金標準文章
+ * QueryValidator - 檢查檢索式是否涵蓋種子文獻，並以獨立驗證組估計泛化能力
+ *
+ * validation_status:
+ *   verified   PubMed 正常執行並完成比對
+ *   unreliable PubMed 回報找不到片語或欄位（部分條件可能被忽略），結果僅供參考
+ *   skipped    檢索式有語法錯誤，未送出
+ *   failed     PubMed 暫時無法驗證，涵蓋與否未知
  */
 class QueryValidator {
   constructor(pubMedClient = null) {
     this.pubMedClient = pubMedClient || new PubMedClient();
   }
 
-  /**
-   * 驗證單一搜尋式
-   * @param {Object} query - 搜尋式物件
-   * @param {string[]} goldPmids - 金標準 PMIDs
-   * @returns {Promise<Object>} 驗證結果
-   */
-  async validateQuery(query, goldPmids) {
+  async validateQuery(query, seedPmids, validationPmids = []) {
+    if (query.lint_errors?.length) {
+      return this._withMetrics({ ...query, validation_status: 'skipped', hit_count: null, missing_pmids: [], covers_all_gold: null }, seedPmids, validationPmids);
+    }
     try {
-      const result = await this.pubMedClient.validateQueryCoversGoldPmids(
-        query.query_string,
-        goldPmids
-      );
-
-      return {
+      const result = await this.pubMedClient.validateQueryCoversGoldPmids(query.query_string, [...seedPmids, ...validationPmids]);
+      const captured = new Set(result.captured_pmids);
+      const seedMissing = seedPmids.filter(p => !captured.has(p));
+      const validated = {
         ...query,
+        validation_status: result.pubmed_errors.length ? 'unreliable' : 'verified',
         hit_count: result.hit_count,
-        covers_all_gold: result.covers_all_gold,
-        missing_pmids: result.missing_pmids,
-        query_translation: result.query_translation
+        missing_pmids: seedMissing,
+        covers_all_gold: seedMissing.length === 0,
+        query_translation: result.query_translation,
+        pubmed_errors: result.pubmed_errors,
+        pubmed_warnings: result.pubmed_warnings,
       };
+      if (validationPmids.length) {
+        validated.validation_set = {
+          captured: validationPmids.filter(p => captured.has(p)),
+          missing: validationPmids.filter(p => !captured.has(p)),
+        };
+      }
+      return this._withMetrics(validated, seedPmids, validationPmids);
     } catch (error) {
       logFailure(`Error validating query ${query.id}:`, error);
-      return {
+      return this._withMetrics({
         ...query,
+        validation_status: 'failed',
         hit_count: null,
-        covers_all_gold: false,
-        missing_pmids: goldPmids,
-        error: 'PubMed 搜尋式驗證暫時失敗，請稍後重試'
-      };
+        missing_pmids: [],
+        covers_all_gold: null,
+        error: error.retryable === false ? error.message : 'PubMed 驗證暫時失敗，請稍後重試',
+      }, seedPmids, validationPmids);
     }
   }
 
   /**
-   * 批量驗證多個搜尋式（並行處理）
-   * @param {Object[]} queries - 搜尋式陣列
-   * @param {string[]} goldPmids - 金標準 PMIDs
-   * @param {Object} options - 選項
-   * @param {boolean} options.parallel - 是否並行驗證（預設 true）
-   * @param {number} options.concurrency - 並行數量（預設 3）
-   * @returns {Promise<Object[]>} 驗證結果陣列
+   * 依序驗證（每條兩次 ESearch），避免超過 NCBI 速率限制
    */
-  async validateQueries(queries, goldPmids, options = {}) {
-    const { parallel = true, concurrency = 3 } = options;
-
-    if (parallel && queries.length <= concurrency) {
-      // 查詢數少於並行數，直接全部並行
-      console.log(`Validating ${queries.length} queries in parallel...`);
-      const results = await Promise.all(
-        queries.map(query => this.validateQuery(query, goldPmids))
-      );
-      return results;
-    } else if (parallel) {
-      // 分批並行處理
-      console.log(`Validating ${queries.length} queries with concurrency ${concurrency}...`);
-      const results = [];
-      for (let i = 0; i < queries.length; i += concurrency) {
-        const batch = queries.slice(i, i + concurrency);
-        const batchResults = await Promise.all(
-          batch.map(query => this.validateQuery(query, goldPmids))
-        );
-        results.push(...batchResults);
-
-        // 批次間短暫延遲
-        if (i + concurrency < queries.length) {
-          await this._delay(200);
-        }
-      }
-      return results;
-    } else {
-      // 順序驗證（舊的行為）
-      const results = [];
-      for (const query of queries) {
-        const result = await this.validateQuery(query, goldPmids);
-        results.push(result);
-        await this._delay(300);
-      }
-      return results;
+  async validateQueries(queries, seedPmids, { validationPmids = [] } = {}) {
+    const results = [];
+    for (const query of queries) {
+      results.push(await this.validateQuery(query, seedPmids, validationPmids));
     }
+    return results;
+  }
+
+  _withMetrics(query, seedPmids, validationPmids) {
+    return { ...query, quality_metrics: this.calculateQualityMetrics(query, seedPmids.length, validationPmids.length) };
   }
 
   /**
-   * 生成警告訊息
-   * @param {Object[]} validatedQueries - 驗證後的搜尋式陣列
-   * @returns {string[]} 警告訊息陣列
+   * 種子涵蓋率只代表這組種子文獻，不是對所有相關文獻的召回率；
+   * 驗證組未參與選詞與產生檢索式，才能用來估計泛化能力。
    */
+  calculateQualityMetrics(query, seedCount, validationCount = 0) {
+    const known = ['verified', 'unreliable'].includes(query.validation_status) && seedCount > 0;
+    const captured = known ? seedCount - query.missing_pmids.length : null;
+    const metrics = {
+      seed_coverage: known ? `${captured}/${seedCount}` : null,
+      seed_coverage_ratio: known ? captured / seedCount : null,
+      // Hits per captured seed: screening workload relative to the seeds, not precision.
+      hits_per_seed: known && captured > 0 && Number.isFinite(query.hit_count) ? Math.round(query.hit_count / captured) : null,
+    };
+    if (validationCount > 0) {
+      const hit = query.validation_set?.captured.length;
+      metrics.validation_coverage = known ? `${hit}/${validationCount}` : null;
+      metrics.validation_coverage_ratio = known ? hit / validationCount : null;
+    }
+    return metrics;
+  }
+
   generateWarnings(validatedQueries) {
     const warnings = [];
-
-    for (const query of validatedQueries) {
-      if (query.error) {
-        warnings.push(`${query.label}: Unable to validate due to error - ${query.error}`);
-      } else if (!query.covers_all_gold) {
-        const missingList = query.missing_pmids.join(', ');
-        warnings.push(`${query.label} does not include PMID(s): ${missingList}`);
+    for (const q of validatedQueries) {
+      const label = q.label || q.id;
+      if (q.validation_status === 'failed') {
+        warnings.push(`${label}：無法驗證（${q.error}），涵蓋情況未知`);
+        continue;
       }
-
-      if (query.hit_count && query.hit_count > 10000) {
-        warnings.push(`${query.label} returns ${query.hit_count} results - consider adding more specific terms`);
+      if (q.validation_status === 'skipped') {
+        warnings.push(`${label}：檢索式有錯誤，未送 PubMed 驗證（${(q.lint_errors || []).join('；')}）`);
+        continue;
+      }
+      for (const message of q.pubmed_errors || []) warnings.push(`${label}：${message}（部分條件可能被 PubMed 忽略）`);
+      for (const message of q.pubmed_warnings || []) warnings.push(`${label}：${message}`);
+      if (q.missing_pmids?.length) warnings.push(`${label}：未涵蓋種子文獻 PMID ${q.missing_pmids.join(', ')}`);
+      if (q.validation_set?.missing.length) warnings.push(`${label}：未涵蓋驗證組 PMID ${q.validation_set.missing.join(', ')}`);
+      if (q.hit_count === 0) warnings.push(`${label}：PubMed 命中 0 筆`);
+      else if (q.hit_count > 10000) {
+        warnings.push(`${label}：命中 ${q.hit_count.toLocaleString('en-US')} 筆，篩選工作量大；是否縮小範圍應依研究問題決定，不要只為了減量而刪詞`);
       }
     }
-
     return warnings;
-  }
-
-  /**
-   * 計算搜尋式的品質指標
-   * @param {Object} query - 驗證後的搜尋式
-   * @param {number} totalGold - 金標準文章總數
-   * @returns {Object} 品質指標
-   */
-  calculateQualityMetrics(query, totalGold) {
-    const capturedGold = totalGold - (query.missing_pmids?.length || 0);
-
-    return {
-      recall: totalGold > 0 ? capturedGold / totalGold : 0,
-      nnt: query.hit_count && capturedGold > 0
-        ? Math.round(query.hit_count / capturedGold)
-        : null, // Number Needed to screen to find one gold article
-      coverage_rate: `${capturedGold}/${totalGold}`
-    };
-  }
-
-  /**
-   * 延遲函數
-   */
-  _delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 

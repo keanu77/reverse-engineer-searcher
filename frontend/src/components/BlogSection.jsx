@@ -123,6 +123,17 @@ function BlogSection({
             )}
           </div>
 
+          {blogResult.quality_warnings?.length > 0 && (
+            <div className="blog-quality-warnings" role="alert">
+              <h4>發布前請先處理</h4>
+              <ul>
+                {blogResult.quality_warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {blogResult.article ? (
             <div className="blog-content">
               <article className="blog-article">
@@ -168,6 +179,9 @@ function BlogSection({
                             PMID: {ref.pmid}
                           </a>{" "}
                           - {ref.title} ({ref.journal}, {ref.year})
+                          {ref.isCited === false && (
+                            <span className="ref-uncited">（文中未引用）</span>
+                          )}
                         </li>
                       ))}
                   </ul>
@@ -194,6 +208,9 @@ function BlogSection({
                             PMID: {ref.pmid}
                           </a>{" "}
                           - {ref.title} ({ref.journal}, {ref.year})
+                          {ref.isCited === false && (
+                            <span className="ref-uncited">（文中未引用）</span>
+                          )}
                         </li>
                       ))}
                   </ul>

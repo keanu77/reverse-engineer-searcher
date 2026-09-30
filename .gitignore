@@ -25,3 +25,6 @@ npm-debug.log*
 # Temp files
 *.tmp
 *.temp
+
+# Local audit evidence and handoff notes
+.claude/

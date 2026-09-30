@@ -150,7 +150,7 @@ test('API request budget returns 429 and health remains available', async () => 
 test('search pipeline returns three translated strategies with mocked upstream only', async () => {
   const article = { pmid: '123', title: 'Example teaching study', journal: 'Fixture', year: '2024', mesh_major: ['Exercise'], mesh_all: ['Exercise'], keywords: ['Education'] };
   jest.spyOn(PubMedClient.prototype, 'fetchArticlesByPmids').mockResolvedValue({ articles: [article], missingPmids: [] });
-  jest.spyOn(PubMedClient.prototype, 'validateQueryCoversGoldPmids').mockResolvedValue({ hit_count: 12, covers_all_gold: true, missing_pmids: [], query_translation: 'fixture' });
+  jest.spyOn(PubMedClient.prototype, 'validateQueryCoversGoldPmids').mockResolvedValue({ hit_count: 12, captured_pmids: ['123'], covers_all_gold: true, missing_pmids: [], query_translation: 'fixture', pubmed_errors: [], pubmed_warnings: [] });
   createCompletion.mockImplementation(async ({ messages }) => {
     const classification = messages[0].content.includes('classify terms');
     const result = classification
@@ -164,6 +164,8 @@ test('search pipeline returns three translated strategies with mocked upstream o
   expect(data.queries).toHaveLength(3);
   expect(data.queries[0].translations).toHaveProperty('embase');
   expect(data.queries[0].covers_all_gold).toBe(true);
+  expect(data.queries[0].quality_metrics.seed_coverage).toBe('1/1');
+  expect(data.queries[0].translation_warnings).toHaveProperty('embase');
   expect(data.terms.find(t => t.term === 'Exercise').suggested_role).toBe('I');
   expect(JSON.stringify(data)).not.toContain(callerKey);
 });

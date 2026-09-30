@@ -1905,3 +1905,24 @@ textarea:focus-visible {
   padding: 1rem;
   border-radius: 8px;
 }
+
+/* 2026-09-30 correctness fixes: validation status, issues, warnings */
+.status-success { color: var(--success, #047857); font-weight: 600; }
+.status-warning { color: var(--warning, #b45309); font-weight: 600; }
+.status-error { color: var(--error, #b91c1c); font-weight: 600; }
+.query-issues { margin: 0.75rem 0; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem; }
+.query-issues p { margin: 0.25rem 0; }
+.query-issues.error { background: #fef2f2; color: #991b1b; }
+.query-issues.warning { background: #fffbeb; color: #92400e; }
+.warn-badge { margin-left: 0.35rem; display: inline-grid; place-items: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 0.7rem; font-weight: 700; }
+.query-unavailable { margin: 0; color: #991b1b; }
+.query-translation { margin-top: 0.75rem; font-size: 0.85rem; }
+.query-translation code { display: block; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-word; }
+.translation-warnings { margin: 0.5rem 0 0; padding-left: 1.25rem; font-size: 0.85rem; }
+.validation-set { margin: 1rem 0; }
+.validation-set summary { cursor: pointer; font-weight: 600; }
+.validation-set textarea { min-height: 80px; }
+.method-note { margin: 0.25rem 0 0; font-size: 0.85rem; }
+.blog-quality-warnings { margin: 1rem 0; padding: 1rem 1.25rem; border-radius: 8px; background: #fffbeb; color: #92400e; }
+.blog-quality-warnings h4 { margin: 0 0 0.5rem; }
+.ref-uncited { margin-left: 0.35rem; color: #92400e; font-size: 0.85em; }

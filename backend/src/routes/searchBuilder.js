@@ -4,6 +4,7 @@ import TermAnalyzer from "../modules/TermAnalyzer.js";
 import LLMService from "../modules/LLMService.js";
 import QueryValidator from "../modules/QueryValidator.js";
 import QueryTranslator from "../modules/QueryTranslator.js";
+import { parsePmidList } from "../modules/pmidInput.js";
 import { sanitizeLLMConfig, logFailure, publicError, errorStatus } from "../modules/RequestSecurity.js";
 
 const router = Router();
@@ -36,149 +37,101 @@ router.get("/providers", (req, res) => {
   });
 });
 
-// PMID 嚴格驗證正則（只允許 1-12 位數字）
-const PMID_REGEX = /^[0-9]{1,12}$/;
+// Seeds and validation PMIDs share this upper bound per group.
+const MAX_SEED_PMIDS = 10;
+const MAX_VALIDATION_PMIDS = 20;
+
+const badRequest = (res, message, extra = {}) => res.status(400).json({ error: "Invalid input", message, ...extra });
+
+function rejectedMessage(rejected) {
+  return rejected.map((r) => `${r.input}：${r.reason}`).join("；");
+}
 
 /**
  * POST /api/search-builder/from-pmids
- * 根據 PMIDs 生成搜尋策略
+ * 根據種子 PMIDs 生成搜尋策略；可另給驗證組 PMIDs 做獨立檢查
  */
 router.post("/from-pmids", async (req, res) => {
   try {
-    const { pmids, options = {}, llmConfig = {} } = req.body;
-
-    // 1. 驗證輸入
-    if (!pmids || !Array.isArray(pmids) || pmids.length === 0) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Please provide an array of PMIDs",
-      });
+    const { pmids, validation_pmids = [], options = {}, llmConfig = {} } = req.body || {};
+    if (!Array.isArray(pmids) || !Array.isArray(validation_pmids)) {
+      return badRequest(res, "pmids 與 validation_pmids 必須是陣列");
     }
 
-    // 嚴格驗證並清理 PMIDs
-    const cleanedPmids = [];
-    const invalidPmids = [];
-
-    for (const p of pmids) {
-      const trimmed = String(p).trim();
-      if (PMID_REGEX.test(trimmed)) {
-        cleanedPmids.push(trimmed);
-      } else {
-        const cleaned = trimmed.replace(/\D/g, "");
-        if (cleaned.length > 0 && cleaned.length <= 12) {
-          cleanedPmids.push(cleaned);
-        } else if (trimmed.length > 0) {
-          invalidPmids.push(trimmed);
-        }
-      }
+    const seeds = parsePmidList(pmids);
+    const holdout = parsePmidList(validation_pmids);
+    if (seeds.rejected.length || holdout.rejected.length) {
+      return badRequest(res, `有無法辨識的 PMID：${rejectedMessage([...seeds.rejected, ...holdout.rejected])}`);
     }
+    if (seeds.pmids.length === 0) return badRequest(res, "請至少提供一個種子文獻 PMID");
+    if (seeds.pmids.length > MAX_SEED_PMIDS) return badRequest(res, `種子文獻最多 ${MAX_SEED_PMIDS} 篇`);
+    if (holdout.pmids.length > MAX_VALIDATION_PMIDS) return badRequest(res, `驗證組最多 ${MAX_VALIDATION_PMIDS} 篇`);
+    const overlap = holdout.pmids.filter((p) => seeds.pmids.includes(p));
+    if (overlap.length) return badRequest(res, `驗證組不能包含種子文獻：${overlap.join(", ")}`);
 
-    // 去除重複
-    const uniquePmids = [...new Set(cleanedPmids)];
-
-    if (uniquePmids.length === 0) {
-      return res.status(400).json({
-        error: "Invalid PMIDs",
-        message: "No valid PMIDs found in input",
-        invalidPmids: invalidPmids.slice(0, 5), // 只回傳前 5 個無效的
-      });
-    }
-
-    if (uniquePmids.length > 10) {
-      return res.status(400).json({
-        error: "Too many PMIDs",
-        message: "Maximum 10 PMIDs allowed",
-      });
-    }
-
-    // 2. 初始化模組
     const pubMedClient = new PubMedClient();
     const termAnalyzer = new TermAnalyzer();
-
-    // 建立 LLMService（使用經過驗證和清理的配置）
-    const llmOptions = sanitizeLLMConfig(llmConfig, req);
-    const llmService = new LLMService(llmOptions);
-
+    const llmService = new LLMService(sanitizeLLMConfig(llmConfig, req));
     const queryValidator = new QueryValidator(pubMedClient);
+    const warnings = [];
 
-    // 3. 從 PubMed 取得文章資料
-    console.log(`Fetching articles for PMIDs: ${uniquePmids.join(", ")}`);
-    const { articles, missingPmids } =
-      await pubMedClient.fetchArticlesByPmids(uniquePmids);
-
+    const { articles: fetched, missingPmids } = await pubMedClient.fetchArticlesByPmids(seeds.pmids);
+    if (missingPmids.length) warnings.push(`PubMed 查無這些種子 PMID：${missingPmids.join(", ")}`);
+    const retracted = fetched.filter((a) => a.is_retracted);
+    if (retracted.length) warnings.push(`已撤稿、未納入分析：PMID ${retracted.map((a) => a.pmid).join(", ")}`);
+    const articles = fetched.filter((a) => !a.is_retracted);
     if (articles.length === 0) {
-      return res.status(404).json({
-        error: "No articles found",
-        message: "None of the provided PMIDs were found in PubMed",
-        missing_pmids: missingPmids,
-      });
+      return res.status(404).json({ error: "No articles found", message: "沒有可用的種子文獻（查無或已撤稿）", missing_pmids: missingPmids });
+    }
+    const unindexed = articles.filter((a) => !a.indexed_for_medline);
+    if (unindexed.length) {
+      warnings.push(`尚未完成 MeSH 標引：PMID ${unindexed.map((a) => a.pmid).join(", ")}；只用 MeSH 的區塊可能漏掉這類紀錄`);
     }
 
-    // 4. 分析 terms
-    console.log("Analyzing terms...");
-    const allTerms = termAnalyzer.analyzeArticles(articles);
+    const validationPmids = holdout.pmids;
+    if (validationPmids.length) {
+      const { missingPmids: missingValidation } = await pubMedClient.fetchArticlesByPmids(validationPmids);
+      if (missingValidation.length) warnings.push(`PubMed 查無這些驗證組 PMID：${missingValidation.join(", ")}`);
+    }
 
-    // 過濾 terms（排除過於通用的，保留高頻的）
-    const filteredTerms = termAnalyzer.filterTerms(allTerms, {
-      minDocFreq: 1,
-      excludeGeneric: true,
-      maxTerms: 50,
+    const allTerms = termAnalyzer.analyzeArticles(articles);
+    const filteredTerms = termAnalyzer.filterTerms(allTerms, { minDocFreq: 1, excludeGeneric: true, maxTerms: 50 });
+    const classifiedTerms = await llmService.classifyTerms(filteredTerms, articles);
+    const unclassified = classifiedTerms.filter((t) => t.classification_status !== "classified");
+    if (unclassified.length === classifiedTerms.length && classifiedTerms.length) {
+      warnings.push("詞彙分類失敗，檢索式只能依文獻標題產生，請人工檢查每個概念區塊");
+    } else if (unclassified.length) {
+      warnings.push(`${unclassified.length} 個詞未被模型分類（歸入 Other，不會進入檢索式）`);
+    }
+
+    const groupedTerms = termAnalyzer.groupTermsByRole(classifiedTerms);
+    const maxTermsPerBlock = Number.isInteger(options.maxTermsPerBlock) ? Math.min(Math.max(options.maxTermsPerBlock, 1), 20) : 10;
+    const queries = await llmService.generateSearchQueries(groupedTerms, articles, { maxTermsPerBlock });
+    if (queries.length === 0) {
+      return res.status(502).json({ error: "Generation failed", message: "模型沒有產生可用的檢索式，請重試或更換模型" });
+    }
+    if (queries.length < 3) warnings.push(`模型只產生 ${queries.length} 條有效檢索式`);
+
+    const seedPmids = articles.map((a) => a.pmid);
+    const validatedQueries = await queryValidator.validateQueries(queries, seedPmids, { validationPmids });
+    warnings.push(...queryValidator.generateWarnings(validatedQueries));
+
+    const queriesWithTranslations = validatedQueries.map((q) => {
+      if (q.lint_errors.length) return { ...q, translations: { pubmed: q.query_string }, translation_warnings: {} };
+      const { translations, warnings: translationWarnings, error } = queryTranslator.translateAll(q.query_string);
+      return { ...q, translations, translation_warnings: translationWarnings, ...(error ? { translation_error: error } : {}) };
     });
 
-    // 5. 使用 LLM 分類 terms
-    console.log("Classifying terms with LLM...");
-    const classifiedTerms = await llmService.classifyTerms(
-      filteredTerms,
-      articles,
-    );
-
-    // 6. 按 PICO 角色分組
-    const groupedTerms = termAnalyzer.groupTermsByRole(classifiedTerms);
-
-    // 7. 生成搜尋式
-    console.log("Generating search queries...");
-    const queries = await llmService.generateSearchQueries(
-      groupedTerms,
-      articles,
-      {
-        maxTermsPerBlock: options.maxTermsPerBlock || 10,
-      },
-    );
-
-    // 8. 驗證搜尋式
-    console.log("Validating queries against PubMed...");
-    const goldPmids = articles.map((a) => a.pmid);
-    const validatedQueries = await queryValidator.validateQueries(
-      queries,
-      goldPmids,
-    );
-
-    // 9. 生成警告
-    const warnings = queryValidator.generateWarnings(validatedQueries);
-
-    // 如果有 PMID 找不到，加入警告
-    if (missingPmids.length > 0) {
-      warnings.unshift(`PMIDs not found in PubMed: ${missingPmids.join(", ")}`);
-    }
-
-    // 10. 計算品質指標並加入多資料庫翻譯
-    const queriesWithMetrics = validatedQueries.map((q) => ({
-      ...q,
-      quality_metrics: queryValidator.calculateQualityMetrics(
-        q,
-        goldPmids.length,
-      ),
-      translations: queryTranslator.translateAll(q.query_string),
-    }));
-
-    // 11. 組裝回應
-    const response = {
-      pmids: uniquePmids,
+    res.json({
+      pmids: seeds.pmids,
+      validation_pmids: validationPmids,
       articles: articles.map((a) => ({
         pmid: a.pmid,
         title: a.title,
         journal: a.journal,
         year: a.year,
+        publication_types: a.publication_types,
+        indexed_for_medline: a.indexed_for_medline,
         mesh_major: a.mesh_major,
         mesh_all: a.mesh_all,
         keywords: a.keywords,
@@ -188,59 +141,28 @@ router.post("/from-pmids", async (req, res) => {
         source: t.source,
         doc_freq: t.doc_freq,
         suggested_role: t.suggested_role,
+        classification_status: t.classification_status,
       })),
-      queries: queriesWithMetrics,
+      queries: queriesWithTranslations,
       warnings,
       meta: {
-        total_articles_found: articles.length,
+        generated_at: new Date().toISOString(),
+        seeds_requested: seeds.pmids.length,
+        seeds_used: articles.length,
+        validation_set_size: validationPmids.length,
         total_terms_analyzed: allTerms.length,
         filtered_terms_count: filteredTerms.length,
         missing_pmids: missingPmids,
         llm_provider: llmService.provider,
-        llm_model: llmService.model,
+        llm_model: llmService.strongModel,
+        method_note: "種子涵蓋率只代表這組種子文獻；要估計對其他相關文獻的涵蓋，請提供未參與建構的驗證組 PMID。",
       },
       databases: QueryTranslator.getDatabaseInfo(),
-    };
-
-    res.json(response);
+    });
   } catch (error) {
     logFailure("from-pmids", error);
     res.status(errorStatus(error)).json({
       error: "Processing failed",
-      message: publicError(error),
-    });
-  }
-});
-
-/**
- * POST /api/search-builder/validate-query
- * 驗證單一搜尋式
- */
-router.post("/validate-query", async (req, res) => {
-  try {
-    const { query_string, gold_pmids } = req.body;
-
-    if (!query_string || !gold_pmids) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "Please provide query_string and gold_pmids",
-      });
-    }
-
-    const pubMedClient = new PubMedClient();
-    const result = await pubMedClient.validateQueryCoversGoldPmids(
-      query_string,
-      gold_pmids,
-    );
-
-    res.json({
-      query_string,
-      ...result,
-    });
-  } catch (error) {
-    logFailure("validate-query", error);
-    res.status(errorStatus(error)).json({
-      error: "Validation failed",
       message: publicError(error),
     });
   }
@@ -283,190 +205,81 @@ router.get("/fetch-article/:pmid", async (req, res) => {
   }
 });
 
+// Supporting sources exclude retracted and non-research items and animal-only studies.
+const SUPPORTING_FILTER =
+  " NOT (retracted publication[pt] OR retraction of publication[pt] OR comment[pt] OR letter[pt] OR editorial[pt])) NOT (animals[mh] NOT humans[mh])";
+const MAX_BLOG_SOURCES = 10;
+
 /**
  * POST /api/search-builder/generate-blog
- * 根據搜尋結果生成科普部落格文章
+ * 以使用者提供的主要文獻為核心、檢索結果為輔，生成科普文章
  */
 router.post("/generate-blog", async (req, res) => {
   try {
-    const {
-      query_string,
-      topic,
-      gold_pmids = [],
-      llmConfig = {},
-      options = {},
-    } = req.body;
+    const { query_string, topic, gold_pmids = [], llmConfig = {} } = req.body || {};
 
-    // 輸入驗證
-    if (!query_string) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "請提供搜尋式 (query_string)",
-      });
+    if (typeof query_string !== "string" || !query_string.trim()) {
+      return badRequest(res, "請提供搜尋式 (query_string)");
+    }
+    if (query_string.length > VALIDATION_LIMITS.maxQueryStringLength) {
+      return badRequest(res, `搜尋式長度超過限制（最多 ${VALIDATION_LIMITS.maxQueryStringLength} 字元）`);
+    }
+    if (topic != null && (typeof topic !== "string" || topic.length > VALIDATION_LIMITS.maxTopicLength)) {
+      return badRequest(res, `主題長度超過限制（最多 ${VALIDATION_LIMITS.maxTopicLength} 字元）`);
+    }
+    if (!Array.isArray(gold_pmids)) return badRequest(res, "gold_pmids 必須是陣列");
+    const gold = parsePmidList(gold_pmids);
+    if (gold.rejected.length) return badRequest(res, `有無法辨識的 PMID：${rejectedMessage(gold.rejected)}`);
+    if (gold.pmids.length > VALIDATION_LIMITS.maxPmids) {
+      return badRequest(res, `PMIDs 數量超過限制（最多 ${VALIDATION_LIMITS.maxPmids} 個）`);
     }
 
-    // 驗證 query_string 長度
-    if (
-      typeof query_string !== "string" ||
-      query_string.length > VALIDATION_LIMITS.maxQueryStringLength
-    ) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: `搜尋式長度超過限制（最多 ${VALIDATION_LIMITS.maxQueryStringLength} 字元）`,
-      });
-    }
-
-    // 驗證 topic 長度
-    if (
-      topic &&
-      (typeof topic !== "string" ||
-        topic.length > VALIDATION_LIMITS.maxTopicLength)
-    ) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: `主題長度超過限制（最多 ${VALIDATION_LIMITS.maxTopicLength} 字元）`,
-      });
-    }
-
-    // 驗證 gold_pmids
-    if (!Array.isArray(gold_pmids)) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: "gold_pmids 必須是陣列",
-      });
-    }
-
-    if (gold_pmids.length > VALIDATION_LIMITS.maxPmids) {
-      return res.status(400).json({
-        error: "Invalid input",
-        message: `PMIDs 數量超過限制（最多 ${VALIDATION_LIMITS.maxPmids} 個）`,
-      });
-    }
-
-    // 清理並驗證 PMIDs
-    const cleanedGoldPmids = gold_pmids
-      .map((p) => String(p).trim().replace(/\D/g, ""))
-      .filter((p) => p.length > 0 && p.length <= 12);
-
-    console.log(
-      "Generating blog article for query:",
-      query_string.substring(0, 100) + "...",
-    );
-    console.log("Gold PMIDs (primary sources):", cleanedGoldPmids);
-
-    const llmOptions = sanitizeLLMConfig(llmConfig, req);
-    const llmService = new LLMService(llmOptions);
-
-    // 1. 初始化 PubMed Client
+    const llmService = new LLMService(sanitizeLLMConfig(llmConfig, req));
     const pubMedClient = new PubMedClient();
+    const notes = [];
 
-    // 2. 執行搜尋取得前 10 篇相關文章
-    console.log("Searching PubMed for relevant articles...");
-    const searchResult = await pubMedClient.searchPubMed(query_string, {
-      maxResults: 15,
-    });
+    const { articles: goldArticles, missingPmids } = await pubMedClient.fetchArticlesByPmids(gold.pmids);
+    if (missingPmids.length) notes.push(`PubMed 查無主要文獻 PMID：${missingPmids.join(", ")}`);
+    const retractedGold = goldArticles.filter((a) => a.is_retracted);
+    if (retractedGold.length) notes.push(`主要文獻已撤稿、未納入：PMID ${retractedGold.map((a) => a.pmid).join(", ")}`);
+    const primaryArticles = goldArticles.filter((a) => !a.is_retracted);
 
-    if (!searchResult.pmids || searchResult.pmids.length === 0) {
-      return res.status(404).json({
-        error: "No articles found",
-        message: "搜尋式沒有找到任何文章，無法生成部落格",
-      });
+    const supportingSlots = MAX_BLOG_SOURCES - primaryArticles.length;
+    let supportingArticles = [];
+    let totalResults = 0;
+    if (supportingSlots > 0) {
+      const searchResult = await pubMedClient.searchPubMed(`((${query_string})${SUPPORTING_FILTER}`, { maxResults: supportingSlots + primaryArticles.length });
+      totalResults = searchResult.count;
+      const candidates = searchResult.pmids.filter((p) => !gold.pmids.includes(p)).slice(0, supportingSlots);
+      if (candidates.length) {
+        const { articles } = await pubMedClient.fetchArticlesByPmids(candidates);
+        supportingArticles = articles.filter((a) => !a.is_retracted);
+      } else {
+        notes.push("補充檢索沒有找到其他文獻，只使用主要文獻");
+      }
     }
 
-    // 3. 取得文章詳細資訊（包含摘要）
-    // 合併 gold_pmids 和搜尋結果，確保 gold_pmids 都包含在內
-    // 確保 gold PMIDs 不受 slice 限制，額外補充搜尋結果
-    const searchOnlyPmids = searchResult.pmids.filter(
-      (p) => !cleanedGoldPmids.includes(p),
-    );
-    const allPmids = [...cleanedGoldPmids, ...searchOnlyPmids.slice(0, 15)];
-    console.log(`Fetching details for ${allPmids.length} articles...`);
-    const { articles } = await pubMedClient.fetchArticlesByPmids(allPmids);
-
-    if (articles.length === 0) {
-      return res.status(404).json({
-        error: "No article details found",
-        message: "無法取得文章詳細資訊",
-      });
+    if (primaryArticles.length + supportingArticles.length === 0) {
+      return res.status(404).json({ error: "No articles found", message: "沒有可用的文獻，無法生成文章" });
     }
 
-    // 4. 分類文章：主要文章 (gold) vs 輔助文章
-    const goldPmidSet = new Set(cleanedGoldPmids.map((p) => String(p)));
-    const primaryArticles = articles.filter((a) =>
-      goldPmidSet.has(String(a.pmid)),
-    );
-    const supportingArticles = articles
-      .filter((a) => !goldPmidSet.has(String(a.pmid)))
-      .slice(0, 10 - primaryArticles.length);
+    const articleTopic = topic?.trim() || llmService.inferTopicFromArticles(primaryArticles.length ? primaryArticles : supportingArticles);
+    const blogResult = await llmService.generateBlogArticle(primaryArticles, supportingArticles, articleTopic);
 
-    console.log(
-      `Primary articles: ${primaryArticles.length}, Supporting articles: ${supportingArticles.length}`,
-    );
-
-    // 6. 決定主題（如果沒有提供，從主要文章推斷）
-    const articleTopic =
-      topic ||
-      llmService.inferTopicFromArticles(
-        primaryArticles.length > 0 ? primaryArticles : articles,
-      );
-
-    // 7. 生成部落格文章（含 fallback 處理）
-    console.log(`Generating blog article about: ${articleTopic}`);
-    let blogResult;
-    try {
-      blogResult = await llmService.generateBlogArticle(
-        primaryArticles,
-        supportingArticles,
-        articleTopic,
-        {
-          wordCount: options.wordCount || "2000-2500",
-          language: options.language || "zh-TW",
-        },
-      );
-    } catch (blogError) {
-      logFailure("blog-partial", blogError);
-      // 回傳部分結果：至少有文章清單和主題
-      return res.json({
-        success: false,
-        article: null,
-        metadata: {
-          topic: articleTopic,
-          primarySourceCount: primaryArticles.length,
-          supportingSourceCount: supportingArticles.length,
-          totalSourceCount: primaryArticles.length + supportingArticles.length,
-          error: publicError(blogError),
-          generatedAt: new Date().toISOString(),
-        },
-        references: [...primaryArticles, ...supportingArticles].map((a) => ({
-          pmid: a.pmid,
-          title: a.title,
-          journal: a.journal,
-          year: a.year,
-          isPrimary: primaryArticles.some((p) => p.pmid === a.pmid),
-        })),
-        searchInfo: {
-          query: query_string,
-          totalResults: searchResult.count,
-          primaryArticlesUsed: primaryArticles.length,
-          supportingArticlesUsed: supportingArticles.length,
-        },
-      });
-    }
-
-    // 8. 回傳結果
     res.json({
-      success: true,
       ...blogResult,
+      quality_warnings: [...notes, ...blogResult.quality_warnings],
       searchInfo: {
         query: query_string,
-        totalResults: searchResult.count,
-        primaryArticlesUsed: primaryArticles.length,
-        supportingArticlesUsed: supportingArticles.length,
+        totalResults,
+        primaryArticlesUsed: blogResult.metadata.primarySourceCount,
+        supportingArticlesUsed: blogResult.metadata.supportingSourceCount,
       },
     });
   } catch (error) {
     logFailure("generate-blog", error);
     res.status(errorStatus(error)).json({
+      success: false,
       error: "Blog generation failed",
       message: publicError(error),
     });

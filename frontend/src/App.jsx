@@ -20,6 +20,7 @@ import { useBlogGeneration } from "./hooks/useBlogGeneration";
 
 // Utils
 import { getErrorMessage } from "./utils/errorMessages";
+import { parsePmidText } from "./utils/pmidInput";
 
 // 設定 axios 超時
 axios.defaults.timeout = 120000;
@@ -33,6 +34,7 @@ const escapeCsvField = (value) => {
 function App() {
   // 主要狀態
   const [pmidInput, setPmidInput] = useState("");
+  const [validationInput, setValidationInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [loadingProgress, setLoadingProgress] = useState(0);
@@ -50,16 +52,12 @@ function App() {
   // 部落格生成 Hook
   const blogHook = useBlogGeneration();
 
-  // 即時 PMID 解析結果
-  const parsedPmids = useMemo(() => {
-    return pmidInput
-      .split(/[\s,;\n]+/)
-      .map((s) => s.trim().replace(/\D/g, ""))
-      .filter((s) => s.length > 0 && s.length <= 12);
-  }, [pmidInput]);
-
-  const uniquePmids = useMemo(() => [...new Set(parsedPmids)], [parsedPmids]);
-  const duplicateCount = parsedPmids.length - uniquePmids.length;
+  // 即時 PMID 解析結果（種子文獻與驗證組）
+  const seedParse = useMemo(() => parsePmidText(pmidInput), [pmidInput]);
+  const validationParse = useMemo(() => parsePmidText(validationInput), [validationInput]);
+  const uniquePmids = seedParse.pmids;
+  const duplicateCount = seedParse.duplicates;
+  const validationOverlap = validationParse.pmids.filter((p) => uniquePmids.includes(p));
 
   // 漸進式進度更新（非線性，前期快後期慢，避免假進度感）
   const simulateProgress = useCallback(() => {
@@ -93,6 +91,19 @@ function App() {
 
   // 提交搜尋
   const handleSubmit = async () => {
+    const rejected = [...seedParse.rejected, ...validationParse.rejected];
+    if (rejected.length > 0) {
+      setError(`有無法辨識的輸入：${rejected.map((r) => `${r.input}（${r.reason}）`).join("、")}`);
+      setErrorType("validation");
+      return;
+    }
+
+    if (validationOverlap.length > 0) {
+      setError(`驗證組不能包含種子文獻：${validationOverlap.join(", ")}`);
+      setErrorType("validation");
+      return;
+    }
+
     if (uniquePmids.length === 0) {
       setError("請輸入至少一個有效的 PMID");
       setErrorType("validation");
@@ -123,6 +134,7 @@ function App() {
     try {
       const requestBody = {
         pmids: uniquePmids,
+        validation_pmids: validationParse.pmids,
         options: { maxTermsPerBlock: 10 },
       };
 
@@ -172,10 +184,11 @@ function App() {
     if (!result?.queries) return;
 
     let content = `# Reverse-Engineer Searcher 搜尋策略報告\n`;
-    content += `# 生成時間: ${new Date().toLocaleString("zh-TW")}\n`;
-    content += `# LLM: ${result.meta?.llm_provider} / ${result.meta?.llm_model}\n\n`;
+    content += `# 產生時間: ${result.meta?.generated_at || new Date().toISOString()}\n`;
+    content += `# LLM: ${result.meta?.llm_provider} / ${result.meta?.llm_model}\n`;
+    content += `# 說明: ${result.meta?.method_note || ""}\n\n`;
 
-    content += `## 重要文獻 (${result.articles?.length || 0} 篇)\n`;
+    content += `## 種子文獻 (${result.articles?.length || 0} 篇)\n`;
     result.articles?.forEach((a) => {
       content += `- PMID: ${a.pmid} | ${a.title} (${a.journal}, ${a.year})\n`;
     });
@@ -184,12 +197,23 @@ function App() {
     content += `## 搜尋策略\n\n`;
     result.queries.forEach((q) => {
       content += `### ${q.label}\n`;
-      content += `命中數: ${q.hit_count?.toLocaleString() || "N/A"}\n`;
-      content += `涵蓋率: ${q.quality_metrics?.coverage_rate || "N/A"}\n`;
-      content += `NNT: ${q.quality_metrics?.nnt || "N/A"}\n\n`;
+      content += `PubMed 驗證狀態: ${q.validation_status}\n`;
+      content += `PubMed 命中數: ${q.hit_count?.toLocaleString() ?? "未知"}\n`;
+      content += `種子文獻涵蓋: ${q.quality_metrics?.seed_coverage ?? "未知"}\n`;
+      if (q.quality_metrics?.validation_coverage !== undefined) {
+        content += `驗證組涵蓋: ${q.quality_metrics.validation_coverage ?? "未知"}\n`;
+      }
+      content += `每篇種子對應命中數: ${q.quality_metrics?.hits_per_seed ?? "未知"}\n`;
+      if (q.query_translation) content += `PubMed 實際執行: ${q.query_translation}\n`;
+      content += `\n`;
 
       Object.entries(q.translations || {}).forEach(([db, query]) => {
-        content += `[${db.toUpperCase()}]\n${query}\n\n`;
+        if (!query) return;
+        content += `[${db.toUpperCase()}]\n${query}\n`;
+        (q.translation_warnings?.[db] || []).forEach((w) => {
+          content += `  ! ${w}\n`;
+        });
+        content += `\n`;
       });
       content += `---\n\n`;
     });
@@ -208,20 +232,22 @@ function App() {
     if (!result?.queries) return;
 
     const rows = [
-      ["版本", "資料庫", "搜尋式", "命中數", "涵蓋率", "NNT"].map(
+      ["版本", "資料庫", "搜尋式", "PubMed 命中數", "種子涵蓋", "驗證組涵蓋", "翻譯警告"].map(
         escapeCsvField,
       ),
     ];
 
     result.queries.forEach((q) => {
       Object.entries(q.translations || {}).forEach(([db, query]) => {
+        if (!query) return;
         rows.push([
           escapeCsvField(q.label),
           escapeCsvField(db.toUpperCase()),
           escapeCsvField(query),
-          escapeCsvField(q.hit_count || ""),
-          escapeCsvField(q.quality_metrics?.coverage_rate || ""),
-          escapeCsvField(q.quality_metrics?.nnt || ""),
+          escapeCsvField(q.hit_count ?? ""),
+          escapeCsvField(q.quality_metrics?.seed_coverage ?? ""),
+          escapeCsvField(q.quality_metrics?.validation_coverage ?? ""),
+          escapeCsvField((q.translation_warnings?.[db] || []).join("；")),
         ]);
       });
     });
@@ -324,7 +350,7 @@ function App() {
 
       {/* 輸入區段 */}
       <section className="input-section" aria-labelledby="input-heading">
-        <h2 id="input-heading">輸入重要文獻 PMIDs</h2>
+        <h2 id="input-heading">輸入種子文獻 PMID</h2>
 
         <textarea
           value={pmidInput}
@@ -344,6 +370,11 @@ function App() {
               >
                 檢測到 {uniquePmids.length} 個 PMID
               </span>
+              {seedParse.rejected.length > 0 && (
+                <span className="error-text">
+                  無法辨識：{seedParse.rejected.map((r) => `${r.input}（${r.reason}）`).join("、")}
+                </span>
+              )}
               {duplicateCount > 0 && (
                 <span className="duplicate-warning">
                   （已自動移除 {duplicateCount} 個重複）
@@ -365,6 +396,34 @@ function App() {
           )}
         </div>
 
+        <details className="validation-set">
+          <summary>驗證組（選填，建議）</summary>
+          <p className="hint">
+            另外輸入幾篇同樣應該被找到、但<strong>不要</strong>拿來建構檢索式的文獻 PMID。
+            它們不參與選詞與產生檢索式，只用來檢查檢索式對「沒看過的文獻」的涵蓋情況。
+          </p>
+          <textarea
+            value={validationInput}
+            onChange={(e) => setValidationInput(e.target.value)}
+            placeholder="驗證組 PMID，可用逗號、空格或換行分隔"
+            disabled={loading}
+            aria-label="輸入驗證組 PMID"
+          />
+          {(validationParse.pmids.length > 0 || validationParse.rejected.length > 0) && (
+            <div className="pmid-stats" aria-live="polite">
+              <span className="pmid-count good">驗證組 {validationParse.pmids.length} 篇</span>
+              {validationParse.rejected.length > 0 && (
+                <span className="error-text">
+                  無法辨識：{validationParse.rejected.map((r) => `${r.input}（${r.reason}）`).join("、")}
+                </span>
+              )}
+              {validationOverlap.length > 0 && (
+                <span className="error-text">與種子文獻重複：{validationOverlap.join(", ")}</span>
+              )}
+            </div>
+          )}
+        </details>
+
         {/* 進階設定 */}
         <AdvancedSettings {...llmConfigHook} />
 
@@ -381,6 +440,7 @@ function App() {
             className="btn btn-secondary"
             onClick={() => {
               setPmidInput("");
+              setValidationInput("");
               setResult(null);
               setError(null);
               blogHook.resetBlog();
@@ -427,8 +487,9 @@ function App() {
         <>
           {/* Meta info */}
           {result.meta && (
-            <div className="meta-info" aria-label="LLM 資訊">
+            <div className="meta-info" aria-label="產生資訊">
               使用 LLM: {result.meta.llm_provider} / {result.meta.llm_model}
+              {result.meta.method_note && <p className="method-note">{result.meta.method_note}</p>}
             </div>
           )}
 

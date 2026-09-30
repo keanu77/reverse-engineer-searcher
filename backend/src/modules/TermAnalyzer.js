@@ -2,28 +2,18 @@
  * TermAnalyzer - 分析與統計文章的 MeSH terms 和 keywords
  */
 
-// 常見的過於通用的 MeSH terms（可能需要排除或降低優先級）
+// MeSH check tags and headings that rarely define a review question.
+// Age groups, sex and study-design headings are kept: they can be the question itself
+// (paediatric, geriatric or sex-difference reviews), so the classifier decides.
 const GENERIC_TERMS = new Set([
   'humans',
-  'adult',
   'male',
   'female',
-  'middle aged',
-  'aged',
-  'young adult',
-  'adolescent',
-  'child',
-  'infant',
   'animals',
   'treatment outcome',
-  'prospective studies',
-  'retrospective studies',
   'follow-up studies',
   'time factors',
-  'reference values',
-  'age factors',
-  'sex factors',
-  'risk factors'
+  'reference values'
 ]);
 
 class TermAnalyzer {
@@ -54,7 +44,7 @@ class TermAnalyzer {
       }
       // 其次：MeSH-major > MeSH > keyword
       const sourceOrder = { 'MeSH-major': 0, 'MeSH': 1, 'keyword': 2 };
-      return (sourceOrder[a.source] || 3) - (sourceOrder[b.source] || 3);
+      return (sourceOrder[a.source] ?? 3) - (sourceOrder[b.source] ?? 3);
     });
   }
 
@@ -83,12 +73,12 @@ class TermAnalyzer {
           });
         } else {
           const existing = this.termMap.get(key);
-          existing.sources.add(source);
-          existing.articles.add(article.pmid);
-          // 如果有更高優先級的 source，保留原始 term 格式
-          if (source === 'MeSH-major' && !existing.sources.has('MeSH-major')) {
+          // Prefer the MeSH spelling over a keyword spelling of the same term.
+          if (source !== 'keyword' && !existing.sources.has('MeSH') && !existing.sources.has('MeSH-major')) {
             existing.term = rawTerm;
           }
+          existing.sources.add(source);
+          existing.articles.add(article.pmid);
         }
       }
     }
@@ -180,64 +170,6 @@ class TermAnalyzer {
     }
 
     return groups;
-  }
-
-  /**
-   * 生成 term 的 PubMed 搜尋格式
-   * @param {Object} term - term 物件
-   * @param {boolean} includeTiab - 是否包含 title/abstract 搜尋
-   * @returns {string} PubMed 格式的搜尋詞
-   */
-  formatTermForPubMed(term, includeTiab = true) {
-    const parts = [];
-
-    // 如果是 MeSH term，加上 [Mesh] 標籤
-    if (term.source === 'MeSH-major' || term.source === 'MeSH') {
-      parts.push(`"${term.term}"[Mesh]`);
-    }
-
-    // 加上 title/abstract 搜尋
-    if (includeTiab) {
-      // 產生可能的變體形式
-      const variants = this._generateTermVariants(term.term);
-      for (const variant of variants) {
-        parts.push(`${variant}[tiab]`);
-      }
-    }
-
-    if (parts.length === 1) {
-      return parts[0];
-    }
-
-    return `(${parts.join(' OR ')})`;
-  }
-
-  /**
-   * 生成 term 的可能變體（用於 tiab 搜尋）
-   */
-  _generateTermVariants(term) {
-    const variants = new Set();
-
-    // 原始形式
-    variants.add(`"${term}"`);
-
-    // 如果包含空格，也加上單詞組合
-    const words = term.split(/\s+/);
-    if (words.length > 1) {
-      // 使用萬用字元的形式
-      const truncated = words.map(w => {
-        // 對較長的單字加上 truncation
-        if (w.length > 4) {
-          return w.substring(0, w.length - 1) + '*';
-        }
-        return w;
-      }).join(' ');
-      if (truncated !== term) {
-        variants.add(truncated);
-      }
-    }
-
-    return Array.from(variants);
   }
 }
 
