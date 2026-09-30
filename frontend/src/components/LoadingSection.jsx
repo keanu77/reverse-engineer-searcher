@@ -6,7 +6,7 @@ const LOADING_STEPS = [
   { id: "analyze", label: "正在分析 MeSH 詞彙與關鍵字...", progress: 40 },
   { id: "classify", label: "正在使用 AI 進行 PICO 分類...", progress: 60 },
   { id: "generate", label: "正在生成搜尋策略...", progress: 80 },
-  { id: "validate", label: "正在驗證搜尋式涵蓋率...", progress: 95 },
+  { id: "validate", label: "正在回 PubMed 驗證涵蓋情況...", progress: 95 },
 ];
 
 /**

@@ -27,7 +27,7 @@ function TermsAnalysisTable({ terms, totalArticles }) {
 
   return (
     <section className="terms-section" aria-labelledby="terms-heading">
-      <h2 id="terms-heading">Term 分析表 ({filteredTerms.length} 個詞彙)</h2>
+      <h2 id="terms-heading">詞彙分析 ({filteredTerms.length} 個詞彙)</h2>
 
       <div className="terms-filter" role="group" aria-label="角色篩選">
         {filterOptions.map(({ value, label }) => (
@@ -42,13 +42,13 @@ function TermsAnalysisTable({ terms, totalArticles }) {
         ))}
       </div>
 
-      <div className="table-container" role="region" aria-label="Term 分析結果">
+      <div className="table-container" role="region" aria-label="詞彙分析結果">
         <table className="terms-table" aria-describedby="terms-heading">
           <thead>
             <tr>
-              <th scope="col">Term</th>
+              <th scope="col">詞彙</th>
               <th scope="col">來源</th>
-              <th scope="col">出現次數</th>
+              <th scope="col">出現篇數</th>
               <th scope="col">角色</th>
             </tr>
           </thead>

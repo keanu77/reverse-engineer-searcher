@@ -23,11 +23,16 @@ function BlogSection({
 
   return (
     <section className="blog-section" aria-labelledby="blog-heading">
-      <h2 id="blog-heading">AI 科普文章生成</h2>
-      <p className="section-description">
-        以您提供的重要文獻為主軸（佔 70-80%），搭配搜尋到的相關文獻為輔（佔
-        20-30%），自動生成一篇約 2000-2500 字的科普衛教文章。
-      </p>
+      <div className="section-intro">
+        <img src="/images/article.webp" alt="" width="360" height="237" loading="lazy" />
+        <div>
+          <h2 id="blog-heading">AI 科普文章草稿</h2>
+          <p className="section-description">
+            以種子文獻為核心、檢索結果為輔，依完整摘要寫成繁體中文衛教草稿。每段標註 PMID，並自動附上免責聲明；
+            發布前請處理「發布前請先處理」列出的每一項，並由專業人員審閱。
+          </p>
+        </div>
+      </div>
 
       <div className="blog-input-row">
         <div className="blog-topic-input">
@@ -88,7 +93,7 @@ function BlogSection({
       {blogResult && (
         <div className="blog-result">
           <div className="blog-header">
-            <h3>{blogResult.article ? "生成的文章" : "生成失敗 — 部分結果"}</h3>
+            <h3>文章草稿</h3>
             <div className="blog-meta" aria-label="文章資訊">
               <span>主題：{blogResult.metadata?.topic}</span>
               {blogResult.article && (

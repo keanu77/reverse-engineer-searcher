@@ -9,8 +9,17 @@ import {
   LoadingSection,
   QueriesSection,
   TermsAnalysisTable,
-  LOADING_STEPS,
+  SiteHeader,
+  SiteFooter,
+  HowItWorks,
 } from "./components";
+
+const RESULT_SECTIONS = [
+  { id: "section-articles", label: "種子文獻" },
+  { id: "section-terms", label: "詞彙分析" },
+  { id: "section-queries", label: "檢索式" },
+  { id: "section-blog", label: "科普草稿" },
+];
 
 const BlogSection = React.lazy(() => import("./components/BlogSection"));
 
@@ -330,34 +339,37 @@ function App() {
   };
 
   return (
-    <div className="container">
-      <header className="header">
-        <h1>Reverse-Engineer Searcher</h1>
-        <p className="subtitle">
-          反向工程搜尋字串生成器 | 從重要文獻自動產生 PubMed 搜尋策略
-        </p>
-        <p className="author">
-          製作者：
-          <a
-            href="https://blog.sportsmedicine.tw/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            運動醫學科吳易澄醫師
-          </a>
-        </p>
-      </header>
+    <>
+    <a className="skip-link" href="#main">跳到主要內容</a>
+    <SiteHeader />
+    <main className="shell main" id="main">
+      <section className="hero" aria-labelledby="hero-title">
+        <div className="hero-text">
+          <p className="eyebrow">系統性文獻回顧 · 檢索策略</p>
+          <h2 id="hero-title">從幾篇關鍵論文，<br />反推出可驗證的檢索式</h2>
+          <p className="lead">
+            貼上確定應被找到的論文 PMID，分析它們的 MeSH 與關鍵字，產生三種 PubMed 檢索式，回 PubMed 驗證涵蓋情況，再轉成
+            Embase、Cochrane、WoS、Scopus 語法草稿。
+          </p>
+        </div>
+        <img className="hero-art" src="/images/hero.webp" alt="" width="1200" height="681" />
+      </section>
 
       {/* 輸入區段 */}
       <section className="input-section" aria-labelledby="input-heading">
-        <h2 id="input-heading">輸入種子文獻 PMID</h2>
-
+        <h2 id="input-heading" className="visually-hidden">輸入文獻</h2>
+        <div className="input-grid">
+        <div className="input-panel">
+        <label className="input-label" htmlFor="seed-input">
+          種子文獻 PMID <span className="required">必填</span>
+        </label>
+        <p className="input-help">3–10 篇確定應被找到的論文，用來建構檢索式。</p>
         <textarea
+          id="seed-input"
           value={pmidInput}
           onChange={(e) => setPmidInput(e.target.value)}
-          placeholder="輸入 PMID，可用逗號、空格或換行分隔&#10;例如：&#10;12345678&#10;23456789&#10;34567890"
+          placeholder={"PMID、PMID: 123 或 PubMed 網址\n可用逗號、空格或換行分隔"}
           disabled={loading}
-          aria-label="輸入 PMID"
           aria-describedby="pmid-stats"
         />
 
@@ -391,21 +403,22 @@ function App() {
             </>
           ) : (
             <span className="hint">
-              建議輸入 3-5 篇您確定要被搜尋式撈到的核心文獻 PMID
+              建議至少 3 篇；篇數越多、主題越一致，詞彙分析越穩定
             </span>
           )}
         </div>
+        </div>
 
-        <details className="validation-set">
-          <summary>驗證組（選填，建議）</summary>
-          <p className="hint">
-            另外輸入幾篇同樣應該被找到、但<strong>不要</strong>拿來建構檢索式的文獻 PMID。
-            它們不參與選詞與產生檢索式，只用來檢查檢索式對「沒看過的文獻」的涵蓋情況。
-          </p>
+        <div className="input-panel validation-set">
+          <label className="input-label" htmlFor="validation-input">
+            驗證組 PMID <span className="optional">選填，建議</span>
+          </label>
+          <p className="input-help">同樣應被找到、但<strong>不</strong>拿來建構的論文，用來檢查檢索式對沒看過的文獻是否有效。</p>
           <textarea
+            id="validation-input"
             value={validationInput}
             onChange={(e) => setValidationInput(e.target.value)}
-            placeholder="驗證組 PMID，可用逗號、空格或換行分隔"
+            placeholder={"例如另一篇系統性回顧納入的研究\n可用逗號、空格或換行分隔"}
             disabled={loading}
             aria-label="輸入驗證組 PMID"
           />
@@ -422,7 +435,8 @@ function App() {
               )}
             </div>
           )}
-        </details>
+        </div>
+        </div>
 
         {/* 進階設定 */}
         <AdvancedSettings {...llmConfigHook} />
@@ -465,26 +479,17 @@ function App() {
       <ErrorMessage error={error} errorType={errorType} />
 
       {/* 空狀態引導 */}
-      {!result && !loading && !error && (
-        <section className="empty-state" aria-label="使用指引">
-          <div className="empty-state-content">
-            <h3>如何使用</h3>
-            <ol>
-              <li>在上方輸入框貼入 3-5 個您認為最重要的文獻 PMID</li>
-              <li>系統會分析這些文獻的 MeSH 詞彙和關鍵字</li>
-              <li>AI 自動產生三種版本的 PubMed 搜尋策略</li>
-              <li>搜尋式同步翻譯為 Embase、Cochrane、WoS、Scopus 語法</li>
-            </ol>
-            <p className="empty-state-hint">
-              適用於系統性文獻回顧（Systematic Review）的搜尋策略開發
-            </p>
-          </div>
-        </section>
-      )}
+      {!result && !loading && <HowItWorks />}
 
       {/* 結果區段 */}
       {result && (
         <>
+          <nav className="result-nav" aria-label="結果段落">
+            {RESULT_SECTIONS.map((s, i) => (
+              <a key={s.id} href={`#${s.id}`}><span aria-hidden="true">{i + 1}</span>{s.label}</a>
+            ))}
+          </nav>
+
           {/* Meta info */}
           {result.meta && (
             <div className="meta-info" aria-label="產生資訊">
@@ -509,13 +514,15 @@ function App() {
           )}
 
           {/* 文章列表 */}
-          <ArticlesSection articles={result.articles} />
+          <div id="section-articles"><ArticlesSection articles={result.articles} /></div>
 
           {/* Term 分析表 */}
-          <TermsAnalysisTable
-            terms={result.terms}
-            totalArticles={result.articles?.length}
-          />
+          <div id="section-terms">
+            <TermsAnalysisTable
+              terms={result.terms}
+              totalArticles={result.articles?.length}
+            />
+          </div>
 
           {/* 搜尋式 */}
           <QueriesSection
@@ -536,7 +543,7 @@ function App() {
               </div>
             }
           >
-            <BlogSection
+            <div id="section-blog"><BlogSection
               queries={result.queries}
               blogTopic={blogHook.blogTopic}
               setBlogTopic={blogHook.setBlogTopic}
@@ -547,19 +554,13 @@ function App() {
               onCopyBlog={handleCopyBlog}
               onExportBlogMd={handleExportBlogMd}
               copiedId={copiedId}
-            />
+            /></div>
           </React.Suspense>
-
-          {/* 免責聲明 */}
-          <div className="disclaimer" role="note">
-            本工具基於您選擇的重要文獻自動生成搜尋式，仍建議搭配資訊專家 /
-            librarian 與人工調整後使用。
-            <br />
-            AI 生成的科普文章僅供參考，發布前請務必經過專業人員審核。
-          </div>
         </>
       )}
-    </div>
+    </main>
+    <SiteFooter />
+    </>
   );
 }
 

@@ -8,3 +8,4 @@ export { default as LoadingSection, LOADING_STEPS } from './LoadingSection';
 export { default as QueryCard } from './QueryCard';
 export { default as QueriesSection } from './QueriesSection';
 export { default as TermsAnalysisTable } from './TermsAnalysisTable';
+export { SiteHeader, SiteFooter, HowItWorks } from './SiteChrome';

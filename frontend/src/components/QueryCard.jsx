@@ -21,13 +21,12 @@ function QueryCard({ query, databases, onCopy, copiedId }) {
   const queryText = query.translations?.[selectedDatabase];
   const dbWarnings = query.translation_warnings?.[selectedDatabase] || [];
   const copyKey = `${query.id}-${selectedDatabase}`;
-  const queryIcon = query.id === 'sensitive' ? '🔍' : query.id === 'balanced' ? '⚖️' : '🎯';
 
   return (
     <div className="query-card" role="article" aria-labelledby={`query-title-${query.id}`}>
       <div className="query-header">
         <span id={`query-title-${query.id}`} className="query-title">
-          {queryIcon} {query.label}
+          {query.label}
         </span>
         <div className="query-stats" aria-label="PubMed 驗證結果">
           <span className={`stat status-${status.tone}`}>PubMed：{status.label}</span>
