@@ -188,6 +188,6 @@ test('provider requests reject redirects and have a bounded timeout', async () =
   const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const client = new LLMClient({ provider: 'groq', apiKey: callerKey });
   await client.client.chat.completions.create({ model: 'test-model', messages: [] });
-  expect(fetch.mock.calls[0][1].redirect).toBe('error');
+  expect(fetch.mock.calls[0][1].redirect).toBe('manual');
   expect(client.client.timeout).toBe(45000);
 });

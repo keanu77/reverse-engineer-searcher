@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { workerSafeFetch } from './workerSafeFetch.js';
 
 /**
  * LLMClient - Provider configuration and client initialization
@@ -64,12 +65,9 @@ class LLMClient {
       baseURL: baseURL,
       timeout: 45000,
       maxRetries: 1,
-      // Cloudflare Workers: always invoke fetch with globalThis as receiver to avoid
-      // "Illegal invocation" (surfaced by the OpenAI SDK as "Connection error.").
-      fetch: (...args) => {
-        const [url, init] = args;
-        return globalThis.fetch(url, { ...(init || {}), redirect: 'error' });
-      }
+      // Workers fetch only allows redirect "follow" | "manual"; workerSafeFetch uses
+      // "manual" and throws on any 3xx, so redirects are never followed.
+      fetch: (...args) => workerSafeFetch(...args)
     });
 
     // 設定模型
