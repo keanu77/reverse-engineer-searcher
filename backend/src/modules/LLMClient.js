@@ -64,7 +64,12 @@ class LLMClient {
       baseURL: baseURL,
       timeout: 45000,
       maxRetries: 1,
-      fetch: (url, init) => globalThis.fetch(url, { ...init, redirect: 'error' })
+      // Cloudflare Workers: always invoke fetch with globalThis as receiver to avoid
+      // "Illegal invocation" (surfaced by the OpenAI SDK as "Connection error.").
+      fetch: (...args) => {
+        const [url, init] = args;
+        return globalThis.fetch(url, { ...(init || {}), redirect: 'error' });
+      }
     });
 
     // 設定模型

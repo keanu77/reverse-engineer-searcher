@@ -58,4 +58,42 @@ describe('SafeLogging.logFailure', () => {
     expect(payload.name).toBeUndefined();
     expect(payload.code).toBeUndefined();
   });
+
+  test('logs safe cause name and scrubbed, truncated cause message', () => {
+    const key = 'cause-secret-placeholder';
+    const cause = new TypeError(`Illegal invocation with ${key} ` + 'y'.repeat(300));
+    cause.config = { apiKey: key };
+    const err = new Error('Connection error.', { cause });
+    err.name = 'APIConnectionError';
+    logFailure('llm', err);
+    const [, payload] = errorSpy.mock.calls[0];
+    expect(payload.causeName).toBe('TypeError');
+    expect(payload.causeMessage.startsWith('Illegal invocation with [REDACTED] ')).toBe(true);
+    expect(payload.causeMessage.length).toBe(200);
+    const serialized = JSON.stringify(errorSpy.mock.calls[0]);
+    expect(serialized).not.toContain(key);
+    expect(serialized).not.toMatch(/config|apiKey/);
+  });
+
+  test('redacts env secrets from cause message and omits cause fields when absent', () => {
+    const prev = process.env.TEST_CAUSE_API_KEY;
+    process.env.TEST_CAUSE_API_KEY = 'env-secret-value-123';
+    try {
+      const err = new Error('Connection error.', {
+        cause: { name: 42, message: 'failed using env-secret-value-123' },
+      });
+      logFailure('llm', err);
+      const [, payload] = errorSpy.mock.calls[0];
+      expect(payload.causeName).toBeUndefined();
+      expect(payload.causeMessage).toBe('failed using [REDACTED]');
+    } finally {
+      if (prev === undefined) delete process.env.TEST_CAUSE_API_KEY;
+      else process.env.TEST_CAUSE_API_KEY = prev;
+    }
+
+    logFailure('bare', new Error('no cause'));
+    const [, payload2] = errorSpy.mock.calls[1];
+    expect(payload2.causeName).toBeUndefined();
+    expect(payload2.causeMessage).toBeUndefined();
+  });
 });

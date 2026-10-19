@@ -25,15 +25,36 @@ function collectSecretFragments(error) {
   return secrets;
 }
 
-function safeMessage(error) {
-  if (typeof error?.message !== 'string') return undefined;
-  let message = error.message;
-  for (const secret of collectSecretFragments(error)) {
+function scrubAndTruncate(text, ...sources) {
+  let message = text;
+  const secrets = new Set();
+  for (const source of sources) {
+    for (const secret of collectSecretFragments(source)) secrets.add(secret);
+  }
+  for (const secret of secrets) {
     if (message.includes(secret)) {
       message = message.split(secret).join('[REDACTED]');
     }
   }
   return message.slice(0, 200);
+}
+
+function safeMessage(error) {
+  if (typeof error?.message !== 'string') return undefined;
+  return scrubAndTruncate(error.message, error);
+}
+
+function safeCauseMessage(error) {
+  const cause = error?.cause;
+  if (cause == null || cause.message == null) return undefined;
+  let text;
+  try {
+    text = String(cause.message);
+  } catch {
+    return undefined;
+  }
+  // Scrub secrets known from both the outer error's config and the cause's own config.
+  return typeof cause === 'object' ? scrubAndTruncate(text, error, cause) : scrubAndTruncate(text, error);
 }
 
 export function logFailure(context, error) {
@@ -47,5 +68,7 @@ export function logFailure(context, error) {
     name: typeof error?.name === 'string' ? error.name : undefined,
     message: safeMessage(error),
     code: error?.code != null ? String(error.code) : undefined,
+    causeName: typeof error?.cause?.name === 'string' ? error.cause.name : undefined,
+    causeMessage: safeCauseMessage(error),
   });
 }
