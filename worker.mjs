@@ -18,7 +18,16 @@ function ensureListening() {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env, ctx) {
+    // nodejs_compat does not auto-inject Worker vars/secrets into process.env; copy string
+    // bindings before ensureListening so the long-lived Express app sees GROQ_API_KEY etc.
+    if (env && typeof env === "object") {
+      for (const [key, value] of Object.entries(env)) {
+        if (typeof value === "string") {
+          process.env[key] = value;
+        }
+      }
+    }
     await ensureListening();
     return handleAsNodeRequest(PORT, request);
   },
