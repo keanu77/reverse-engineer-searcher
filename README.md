@@ -67,7 +67,10 @@ cd ..
 
 1. 從 repo 根目錄 `npm run build`，產生 `backend/public/`
 2. 以 `wrangler secret put` 設定 `GROQ_API_KEY`、`AUTH_API_KEY` 等機密（不要寫進 `wrangler.jsonc`）
-3. `wrangler deploy`（Wrangler 4.36 以上）。`RATE_LIMITER` Durable Object（SQLite）與其 `v1` migration 隨首次部署建立，不需在 dashboard 另建 namespace 或 ID；Workers Free 方案亦可使用 SQLite Durable Objects
+3. （建議）`wrangler secret put PUBMED_API_KEY` 設定 NCBI API Key：在 NCBI 帳號的 [Account settings](https://account.ncbi.nlm.nih.gov/settings/) →「API Key Management」免費建立。未設定時 E-utilities 上限為每秒 3 次（Cloudflare 出口 IP 為多人共用，較易被 429），設定後為每秒 10 次。Key 只會放在送往 E-utilities 的 POST 參數，不會寫入日誌；不要寫進 `wrangler.jsonc`
+4. `wrangler deploy`（Wrangler 4.36 以上）。`RATE_LIMITER` Durable Object（SQLite）與其 `v1` migration 隨首次部署建立，不需在 dashboard 另建 namespace 或 ID；Workers Free 方案亦可使用 SQLite Durable Objects
+
+PubMed 請求遇到 429、5xx 或網路錯誤時會以指數退避加 jitter 重試（最多 4 次嘗試；有 `Retry-After` 時採用，單次上限 10 秒，每個 API 請求的重試等待總和上限 12 秒），400/404 等其他 4xx 不重試；同一請求內的 E-utilities 呼叫會序列化並維持在 NCBI 每秒上限內。重試後仍失敗時 API 回 503 並提示稍後再試。
 
 API 限流在 Workers 上以 `RATE_LIMITER` Durable Object 保存共享計數（每個「限制器 + 用戶端 IP」一個物件），各 isolate 共用同一額度；缺少此 binding 時會退回單一 isolate 的記憶體計數並記錄警告。計數物件無法使用時請求以 500 拒絕（fail closed），`/health` 不受影響。
 
@@ -81,7 +84,7 @@ API 限流在 Workers 上以 `RATE_LIMITER` Durable Object 保存共享計數（
 | `OPENAI_API_KEY` | OpenAI API Key | 否 |
 | `GEMINI_API_KEY` | Google Gemini API Key | 否 |
 | `XAI_API_KEY` | xAI API Key | 否 |
-| `PUBMED_API_KEY` | PubMed API Key（提高 rate limit） | 否 |
+| `PUBMED_API_KEY` | NCBI E-utilities API Key（每秒 3 次提高到 10 次；NCBI 帳號設定頁免費申請） | 否（Workers 部署建議設定） |
 | `NODE_ENV` | 正式部署設定為 production | 正式環境 |
 | `PORT` | 服務監聽 port | 否（預設 3001） |
 | `ALLOWED_ORIGINS` | 逗號分隔的前端來源 | 僅跨來源部署 |

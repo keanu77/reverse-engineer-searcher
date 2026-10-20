@@ -4,9 +4,64 @@ import { parsePubmedXml } from "./pubmedXml.js";
 
 const PUBMED_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
-// 重試設定
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 1000; // 1秒起始延遲
+// 重試設定：首次 + 最多 3 次重試，指數退避加 jitter
+const MAX_ATTEMPTS = 4;
+const BASE_DELAY_MS = 1000;
+const MAX_BACKOFF_MS = 8000;
+// Retry-After 上限，避免 PubMed 要求久候時讓 Worker 請求卡住
+const MAX_RETRY_AFTER_MS = 10000;
+// 每個 PubMedClient（每個 API 請求一個）所有重試等待的總預算
+const RETRY_BUDGET_MS = 12000;
+// NCBI 限制：無 key 3 req/s、有 key 10 req/s；留一點餘裕
+const MIN_INTERVAL_NO_KEY_MS = 350;
+const MIN_INTERVAL_WITH_KEY_MS = 110;
+
+/**
+ * PubMed 重試後仍失敗（限流、5xx 或網路錯誤）。路由以 503 回應並顯示 publicMessage。
+ */
+export class PubMedUnavailableError extends Error {
+  constructor({ rateLimited, upstreamStatus, cause }) {
+    super(
+      rateLimited
+        ? `PubMed rate limited (status ${upstreamStatus ?? "unknown"})`
+        : `PubMed unavailable (status ${upstreamStatus ?? "network"})`,
+      cause ? { cause } : undefined,
+    );
+    this.name = "PubMedUnavailableError";
+    this.status = 503;
+    this.rateLimited = rateLimited;
+    this.upstreamStatus = upstreamStatus;
+    this.publicMessage = rateLimited
+      ? "PubMed 目前限制請求頻率（rate limit），請稍候 1 分鐘再試"
+      : "PubMed 暫時無法連線，請稍後再試";
+  }
+}
+
+/**
+ * 解析 Retry-After（秒數或 HTTP-date），回傳毫秒；無效時回傳 null
+ */
+export function parseRetryAfter(value, now = Date.now()) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d+(\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000);
+  const date = Date.parse(text);
+  if (Number.isNaN(date)) return null;
+  return Math.max(0, date - now);
+}
+
+function headerValue(headers, name) {
+  if (!headers) return undefined;
+  if (typeof headers.get === "function") {
+    const value = headers.get(name);
+    if (value != null) return value;
+  }
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return undefined;
+}
 
 // 快取設定
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小時
@@ -32,7 +87,13 @@ class CacheEntry {
  */
 class PubMedClient {
   constructor(apiKey = null) {
-    this.apiKey = apiKey || process.env.PUBMED_API_KEY;
+    const key = apiKey || process.env.PUBMED_API_KEY;
+    this.apiKey = typeof key === "string" && key.trim() ? key.trim() : null;
+    // 每個請求一個 client：限流與重試預算都只作用在同一個 API 請求內，
+    // 不跨請求共用 promise/timer（Workers 不允許跨請求 context 的 I/O）。
+    this._retryBudgetMs = RETRY_BUDGET_MS;
+    this._lastRequestAt = 0;
+    this._throttleTail = Promise.resolve();
     this.axiosInstance = axios.create({
       baseURL: PUBMED_BASE_URL,
       timeout: 30000,
@@ -122,53 +183,78 @@ class PubMedClient {
   }
 
   /**
+   * 序列化同一 client 的 E-utilities 呼叫，維持在 NCBI 每秒上限內
+   */
+  _throttle() {
+    const interval = this.apiKey ? MIN_INTERVAL_WITH_KEY_MS : MIN_INTERVAL_NO_KEY_MS;
+    const slot = this._throttleTail.then(async () => {
+      const wait = this._lastRequestAt + interval - Date.now();
+      if (wait > 0) await this._delay(wait);
+      this._lastRequestAt = Date.now();
+    });
+    this._throttleTail = slot.catch(() => {});
+    return slot;
+  }
+
+  /**
+   * 計算下次重試等待：有 Retry-After 時採用（上限 MAX_RETRY_AFTER_MS），否則指數退避加 jitter
+   */
+  _retryDelayMs(error, attempt) {
+    const status = error?.response?.status;
+    if (status === 429 || status === 503) {
+      const retryAfter = parseRetryAfter(headerValue(error.response.headers, "retry-after"));
+      if (retryAfter != null) return Math.min(retryAfter, MAX_RETRY_AFTER_MS);
+    }
+    const exp = Math.min(BASE_DELAY_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+    // equal jitter：一半固定、一半隨機，避免多個請求同步重試
+    return Math.round(exp / 2 + Math.random() * (exp / 2));
+  }
+
+  /**
    * 帶有指數退避重試的請求包裝器
    * @param {Function} requestFn - 執行請求的函數
    * @param {string} operationName - 操作名稱（用於日誌）
    * @returns {Promise<any>}
    */
   async _withRetry(requestFn, operationName = "request") {
-    let lastError;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       try {
+        await this._throttle();
         return await requestFn();
       } catch (error) {
-        lastError = error;
+        const retryable = this._isRetryableError(error);
+        const delayMs = retryable ? this._retryDelayMs(error, attempt) : 0;
+        const canWait = attempt < MAX_ATTEMPTS && delayMs <= this._retryBudgetMs;
 
-        // 判斷是否應該重試
-        const shouldRetry = this._isRetryableError(error);
-
-        if (!shouldRetry || attempt === MAX_RETRIES) {
+        if (!retryable || !canWait) {
           logFailure("pubmed-request", error);
-          throw error;
+          if (!retryable) throw error;
+          const status = error?.response?.status;
+          throw new PubMedUnavailableError({
+            rateLimited: status === 429 || error?.rateLimited === true,
+            upstreamStatus: status,
+            cause: error,
+          });
         }
 
-        // 計算延遲時間（指數退避：1s, 2s, 4s...）
-        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        this._retryBudgetMs -= delayMs;
         console.warn(
-          `${operationName} attempt ${attempt} failed, retrying in ${delayMs}ms...`,
+          `${operationName} attempt ${attempt} failed (status ${error?.response?.status ?? "network"}), retrying in ${delayMs}ms...`,
         );
         await this._delay(delayMs);
       }
     }
-
-    throw lastError;
   }
 
   /**
-   * 判斷錯誤是否可重試
+   * 判斷錯誤是否可重試：只重試 429、5xx 與網路錯誤；其他 4xx（400/404…）不重試
    */
   _isRetryableError(error) {
-    if (error.retryable === false) return false;
-    // 網路錯誤
-    if (!error.response) {
-      return true;
-    }
-
-    // 特定 HTTP 狀態碼可重試
-    const retryableStatusCodes = [408, 429, 500, 502, 503, 504];
-    return retryableStatusCodes.includes(error.response.status);
+    if (error?.retryable === false) return false;
+    if (error?.retryable === true) return true;
+    const status = error?.response?.status;
+    if (status == null) return true; // 網路錯誤 / 逾時
+    return status === 429 || status >= 500;
   }
 
   /**
@@ -302,6 +388,13 @@ function listMessages(group, labels) {
 function interpretESearch(data) {
   const result = data?.esearchresult;
   const fatal = result?.ERROR || data?.error;
+  // NCBI 有時以 200 + {"error":"API rate limit exceeded"} 回報限流，視為可重試
+  if (typeof data?.error === "string" && /rate limit/i.test(data.error)) {
+    const error = new Error("PubMed API rate limit exceeded");
+    error.retryable = true;
+    error.rateLimited = true;
+    throw error;
+  }
   if (fatal) {
     const error = new Error(`PubMed 無法執行此檢索式：${fatal}`);
     error.retryable = false;

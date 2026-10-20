@@ -10,7 +10,7 @@ export const getErrorMessage = (error) => {
   }
 
   const status = error.response.status;
-  const data = error.response.data;
+  const data = error.response.data || {};
 
   if (status === 400) {
     return { type: 'validation', message: data.message || '輸入格式錯誤，請檢查 PMID' };
@@ -23,6 +23,10 @@ export const getErrorMessage = (error) => {
   }
   if (status === 429) {
     return { type: 'rate_limit', message: 'API 請求過於頻繁，請等待 30 秒後重試' };
+  }
+  if (status === 503) {
+    // 例如 PubMed 限流或服務暫時無法使用：後端訊息已是給使用者看的說明
+    return { type: 'server', message: data.message || '服務暫時無法使用，請稍後再試' };
   }
   if (status >= 500) {
     return { type: 'server', message: '伺服器發生錯誤，請稍後再試' };

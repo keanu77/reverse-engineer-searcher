@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { PROVIDER_CONFIGS } from './LLMClient.js';
+import { PubMedUnavailableError } from './PubMedClient.js';
 
 export class RequestError extends Error {
   constructor(message, status = 400) {
@@ -57,9 +58,13 @@ export function sanitizeLLMConfig(config = {}, req) {
 export { logFailure } from './SafeLogging.js';
 
 export function publicError(error, fallback = '外部服務暫時無法完成請求，請稍後重試') {
-  return error instanceof RequestError ? error.message : fallback;
+  if (error instanceof RequestError) return error.message;
+  if (error instanceof PubMedUnavailableError) return error.publicMessage;
+  return fallback;
 }
 
 export function errorStatus(error) {
-  return error instanceof RequestError ? error.status : 502;
+  if (error instanceof RequestError) return error.status;
+  if (error instanceof PubMedUnavailableError) return 503;
+  return 502;
 }
