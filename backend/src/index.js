@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import searchBuilderRoutes from './routes/searchBuilder.js';
 import rateLimit from 'express-rate-limit';
 import { rateLimitClientOptions } from './modules/clientIp.js';
+import { DurableObjectRateLimitStore, getRateLimitNamespace } from './modules/rateLimitStore.js';
 
 // Cloudflare Workers bundles have no import.meta.url; static files are served by the assets binding there.
 const IN_WORKERS = globalThis.navigator?.userAgent === 'Cloudflare-Workers';
@@ -35,8 +36,17 @@ export function createApp() {
   };
 
   // Rate Limiting 配置
+  // Workers 會把請求分散到多個短命 isolate，記憶體計數不可靠；有 RATE_LIMITER（Durable Object）
+  // binding 時改用共享計數。本機 Node 單一程序維持預設 MemoryStore。
+  const sharedCounters = Boolean(getRateLimitNamespace());
+  if (IN_WORKERS && !sharedCounters) {
+    console.warn('[rate-limit] RATE_LIMITER binding missing; falling back to per-isolate memory counters');
+  }
+  const limiterStore = (prefix) => (sharedCounters ? { store: new DurableObjectRateLimitStore({ prefix }) } : {});
+
   const generalLimiter = rateLimit({
     ...rateLimitClientOptions,
+    ...limiterStore('general:'),
     windowMs: 15 * 60 * 1000, // 15 分鐘
     max: 100, // 每個 IP 最多 100 次請求
     message: {
@@ -50,6 +60,7 @@ export function createApp() {
   // API 端點的更嚴格限制
   const apiLimiter = rateLimit({
     ...rateLimitClientOptions,
+    ...limiterStore('api:'),
     windowMs: 60 * 1000, // 1 分鐘
     max: 10, // 每個 IP 每分鐘最多 10 次 API 請求
     message: {
