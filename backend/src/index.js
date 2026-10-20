@@ -7,8 +7,12 @@ import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import searchBuilderRoutes from './routes/searchBuilder.js';
 import rateLimit from 'express-rate-limit';
+import { rateLimitClientOptions } from './modules/clientIp.js';
+import { DurableObjectRateLimitStore, getRateLimitNamespace } from './modules/rateLimitStore.js';
 
-const __filename = fileURLToPath(import.meta.url);
+// Cloudflare Workers bundles have no import.meta.url; static files are served by the assets binding there.
+const IN_WORKERS = globalThis.navigator?.userAgent === 'Cloudflare-Workers';
+const __filename = IN_WORKERS ? '/worker/index.js' : fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export function createApp() {
@@ -32,7 +36,17 @@ export function createApp() {
   };
 
   // Rate Limiting 配置
+  // Workers 會把請求分散到多個短命 isolate，記憶體計數不可靠；有 RATE_LIMITER（Durable Object）
+  // binding 時改用共享計數。本機 Node 單一程序維持預設 MemoryStore。
+  const sharedCounters = Boolean(getRateLimitNamespace());
+  if (IN_WORKERS && !sharedCounters) {
+    console.warn('[rate-limit] RATE_LIMITER binding missing; falling back to per-isolate memory counters');
+  }
+  const limiterStore = (prefix) => (sharedCounters ? { store: new DurableObjectRateLimitStore({ prefix }) } : {});
+
   const generalLimiter = rateLimit({
+    ...rateLimitClientOptions,
+    ...limiterStore('general:'),
     windowMs: 15 * 60 * 1000, // 15 分鐘
     max: 100, // 每個 IP 最多 100 次請求
     message: {
@@ -45,6 +59,8 @@ export function createApp() {
 
   // API 端點的更嚴格限制
   const apiLimiter = rateLimit({
+    ...rateLimitClientOptions,
+    ...limiterStore('api:'),
     windowMs: 60 * 1000, // 1 分鐘
     max: 10, // 每個 IP 每分鐘最多 10 次 API 請求
     message: {
@@ -76,11 +92,12 @@ export function createApp() {
   const publicPath = join(__dirname, '..', 'public');
 
   // Check if public folder exists (production mode)
-  if (existsSync(publicPath)) {
+  if (!IN_WORKERS && existsSync(publicPath)) {
     app.use(express.static(publicPath));
 
     // Handle React routing, return all requests to React app
-    app.get('*', (req, res) => {
+    // Express 5 (path-to-regexp v8) requires a named wildcard.
+    app.get('/{*splat}', (req, res) => {
       res.sendFile(join(publicPath, 'index.html'));
     });
   } else {
@@ -125,7 +142,7 @@ export function createApp() {
   return app;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+if (!IN_WORKERS && process.argv[1] && resolve(process.argv[1]) === __filename) {
   const app = createApp();
   const port = process.env.PORT || 3001;
   app.listen(port, process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1', () => {

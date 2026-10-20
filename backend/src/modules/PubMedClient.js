@@ -36,6 +36,10 @@ class PubMedClient {
     this.axiosInstance = axios.create({
       baseURL: PUBMED_BASE_URL,
       timeout: 30000,
+      // Cloudflare Workers have no Node http client; axios falls back to fetch there.
+      // Workers reject fetch's default cache mode, so pin one they accept.
+      adapter: ['fetch', 'http'],
+      fetchOptions: { cache: 'no-store' },
     });
   }
 

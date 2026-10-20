@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reverse-engineer-searcher",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./backend/public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health"]
+  },
+  // Shared API rate-limit counters (see backend/src/modules/rateLimitStore.js). SQLite-backed
+  // Durable Objects need no dashboard setup; the migration is applied on the first deploy.
+  "durable_objects": {
+    "bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
+  "vars": { "NODE_ENV": "production", "LLM_PROVIDER": "groq" },
+  "observability": { "enabled": true }
+}

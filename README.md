@@ -61,6 +61,16 @@ cd ..
    - `AUTH_API_KEY`: 隨機服務存取碼（至少 32 隨機位元組），使用管理者 API 額度時必填；與 provider API Key 分開設定
 4. 部署完成！
 
+### Cloudflare Workers 部署
+
+`worker.mjs` 以 `cloudflare:node` 執行同一個 Express app，靜態檔由 assets binding 提供（設定見 `wrangler.jsonc`）。
+
+1. 從 repo 根目錄 `npm run build`，產生 `backend/public/`
+2. 以 `wrangler secret put` 設定 `GROQ_API_KEY`、`AUTH_API_KEY` 等機密（不要寫進 `wrangler.jsonc`）
+3. `wrangler deploy`（Wrangler 4.36 以上）。`RATE_LIMITER` Durable Object（SQLite）與其 `v1` migration 隨首次部署建立，不需在 dashboard 另建 namespace 或 ID；Workers Free 方案亦可使用 SQLite Durable Objects
+
+API 限流在 Workers 上以 `RATE_LIMITER` Durable Object 保存共享計數（每個「限制器 + 用戶端 IP」一個物件），各 isolate 共用同一額度；缺少此 binding 時會退回單一 isolate 的記憶體計數並記錄警告。計數物件無法使用時請求以 500 拒絕（fail closed），`/health` 不受影響。
+
 ## 環境變數
 
 | 變數 | 說明 | 必填 |
@@ -109,7 +119,7 @@ MIT License
 - 瀏覽器中的 key 與存取碼只保留在目前分頁的記憶體，不寫入 localStorage／sessionStorage。重新整理後清除；切換 provider 會清除 key 與自訂端點。
 - 請求會先經本站後端，再傳給所選供應商；公開部署需使用 HTTPS。CORS 白名單不是身份認證。若前後端同來源，不需另設 `ALLOWED_ORIGINS`；跨來源部署請明確列出前端網址。
 - 自訂端點與 Ollama 僅供本機開發使用，公開正式環境停用；自訂端點永遠不繼承管理者的環境 key。
-- 健康檢查 `/health` 不消耗 API 限額。API 仍有每 IP 每分鐘 10 次限制；多副本部署的限制以各程序計算。未設定可信任代理時，反向代理後使用者可能共用代理 IP 額度，正式部署前須依實際拓撲驗證。
+- 健康檢查 `/health` 不消耗 API 限額。API 仍有每 IP 每分鐘 10 次限制，另有全站每 IP 每 15 分鐘 100 次限制。Cloudflare Workers 上計數存於 Durable Object，全球共用；Node 部署使用記憶體計數，多副本時以各程序計算。未設定可信任代理時，反向代理後使用者可能共用代理 IP 額度，正式部署前須依實際拓撲驗證。
 
 ## 驗證
 
