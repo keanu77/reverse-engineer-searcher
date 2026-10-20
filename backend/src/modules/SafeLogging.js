@@ -25,8 +25,11 @@ function collectSecretFragments(error) {
   return secrets;
 }
 
+// E-utilities 與其他 API 常把 key 放在 query/form 參數；不論來源都遮蔽參數值
+const KEY_PARAM_PATTERN = /\b(api[_-]?key|apikey|key|token|access_token)=([^&\s"']+)/gi;
+
 function scrubAndTruncate(text, ...sources) {
-  let message = text;
+  let message = text.replace(KEY_PARAM_PATTERN, '$1=[REDACTED]');
   const secrets = new Set();
   for (const source of sources) {
     for (const secret of collectSecretFragments(source)) secrets.add(secret);
